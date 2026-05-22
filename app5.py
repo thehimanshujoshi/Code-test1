@@ -485,4 +485,4 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
                             st.error("Not enough historical data available from Yahoo Finance for this specific time period.")
 
     except Exception as e:
-        st.error(f"❌ Execution Engine Error: {str(e)}.
+st.error(f"❌ Execution Engine Error: {str(e)}.

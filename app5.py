@@ -17,17 +17,19 @@ st.set_page_config(page_title="Astro-Gann Execution Matrix", page_icon="📈", l
 # 🌍 DYNAMIC TIMEZONE & MARKET ENGINE
 # ==========================================
 def get_market_context(ticker, target_dt):
-    # FIXED: Explicitly handle Nifty and Bank Nifty index symbols
     if ticker in ["^NSEI", "^NSEBANK"] or ticker.endswith(".NS") or ticker.endswith(".BO"):
         tz = pytz.timezone("Asia/Kolkata")
         open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 9, 15))
+        close_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 15, 30))
     elif "-USD" in ticker or "=" in ticker:
         tz = pytz.timezone("UTC")
-        open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 0, 0)) # Crypto runs 24/7
+        open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 0, 0))
+        close_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 23, 59))
     else:
         tz = pytz.timezone("America/New_York")
         open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 9, 30))
-    return tz, open_time
+        close_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 16, 0))
+    return tz, open_time, close_time
 
 # ==========================================
 # 🌌 VEDIC ASTROLOGY ENGINE CONFIGURATION
@@ -182,13 +184,12 @@ target_date = st.sidebar.date_input("Execution Date", datetime.now().date())
 target_dt = datetime(target_date.year, target_date.month, target_date.day)
 
 open_price_type = st.sidebar.radio("Opening Price Type", ["Auto-Fetch Previous Close", "Manual Override Price"])
-manual_open_val = st.sidebar.number_input("Enter Manual Price", value=0.0, step=0.05) if open_price_type == "Manual Override Price" else 0.0
-st.title(f"📈 Gann Execution Matrix: {display_name}")
+manual_open_val = st.sidebar.number_input("Enter Manual Price", value=0.0, step=0.05) if open_price_type == "Manual Override Price" else 0.0st.title(f"📈 Gann Execution Matrix: {display_name}")
 
 with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_name}..."):
     try:
         # Timezone Setup
-        mkt_tz, mkt_open_dt = get_market_context(ticker_symbol, target_dt)
+        mkt_tz, mkt_open_dt, mkt_close_dt = get_market_context(ticker_symbol, target_dt)
         now_utc = datetime.now(pytz.utc)
         now_local = now_utc.astimezone(mkt_tz)
         now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
@@ -208,7 +209,7 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
             st.error(f"❌ Waiting for valid data for {ticker_symbol}. Ensure the ticker is spelled correctly.")
             st.stop()
             
-        df_daily.index, df_intra.index = df_daily.index.tz_localize(None), df_intra.index.tz_localize(None)
+        df_daily.index, df_intra.index, df_15m.index = df_daily.index.tz_localize(None), df_intra.index.tz_localize(None), df_15m.index.tz_localize(None)
         
         # --- TECHNICAL METRICS & GAP LOGIC ---
         pdh, pdl, pdc = df_daily['High'].iloc[-2] if len(df_daily) > 1 else df_daily['High'].iloc[-1], df_daily['Low'].iloc[-2] if len(df_daily) > 1 else df_daily['Low'].iloc[-1], df_daily['Close'].iloc[-2] if len(df_daily) > 1 else df_daily['Close'].iloc[-1]
@@ -230,12 +231,20 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
         w2_view = "📈 BULLISH" if c > e21 and e9 > e21 else "📉 BEARISH" if c < e21 else "⏳ SIDEWAYS"
         m1_view = "📈 STRONG BULL" if c > e50 and e21 > e50 else "📉 STRONG BEAR" if c < e50 and e21 < e50 else "⏳ CONSOLIDATING"
 
-        # --- STRICT 15-MIN MICRO TREND ---
+        # --- STRICT 15-MIN MICRO TREND (Fixing the Post-Market Bug) ---
         df_15m['EMA9'], df_15m['EMA21'] = df_15m['Close'].ewm(span=9).mean(), df_15m['Close'].ewm(span=21).mean()
         df_15m['RSI'] = calculate_rsi(df_15m['Close'])
-        last_closed_15m = df_15m.iloc[-2] if len(df_15m) > 1 else df_15m.iloc[-1]
-        ic, ie9, ie21, irsi = last_closed_15m['Close'], last_closed_15m['EMA9'], last_closed_15m['EMA21'], last_closed_15m['RSI']
         
+        # Determine if we are analyzing a past day or a live day
+        is_market_closed = now_local > mkt_close_dt
+        if is_market_closed and target_date == datetime.now().date():
+            # If reviewing post-market, lock the signal to the morning action (around 10:00 AM) to see what the setup WAS
+            signal_candle = df_15m.iloc[3] if len(df_15m) >= 4 else df_15m.iloc[-1]
+        else:
+            # If live, take the last fully closed 15m candle
+            signal_candle = df_15m.iloc[-2] if len(df_15m) > 1 else df_15m.iloc[-1]
+            
+        ic, ie9, ie21, irsi = signal_candle['Close'], signal_candle['EMA9'], signal_candle['EMA21'], signal_candle['RSI']
         vol_surge = "🔥 High Momentum" if df_15m['Volume'].iloc[-1] > df_15m['Volume'].rolling(20).mean().iloc[-1] else "💤 Normal/Low Vol"
         
         if gap_pts > (pdc * 0.003) and ic > ie21: day_trend = "🚀 STRONG BULLISH (Gap Sustained)"
@@ -283,19 +292,23 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
             else: opt_rec = f"Short Strangle/Straddle near `{atm_strike}`"
             est_return = "Max Premium Decay (Theta)"
 
-        # --- TIMING CALCULATOR FOR ENTRY & EXITS ---
+        # --- PRECISE ENTRY & EXIT TIMINGS ---
         avg_candle_pts = abs(df_intra['High'].iloc[-15:].mean() - df_intra['Low'].iloc[-15:].mean())
         mins_per_candle = int(interval_used.replace('m','').replace('h','60'))
+        
+        # Calculate safe logical entry window (wait 30 mins after open for stability)
+        opt_entry_time = (mkt_open_dt + timedelta(minutes=30)).strftime("%I:%M %p %Z")
+        # Calculate safe logical exit window (1 hour before close to avoid end of day chaos)
+        max_hold_time = (mkt_close_dt - timedelta(hours=1)).strftime("%I:%M %p %Z") 
         
         def est_time(target_pts):
             candles = max(1, target_pts / max(1, avg_candle_pts))
             target_time_local = mkt_open_dt + timedelta(minutes=candles * mins_per_candle)
-            return target_time_local.strftime("%I:%M %p %Z") # Displays EDT, IST, etc.
             
-        # Entry/Exit Recommendation Logic
-        entry_wait_mins = mins_per_candle * 2  # Wait for first 2 candles to close
-        opt_entry_time = (mkt_open_dt + timedelta(minutes=entry_wait_mins)).strftime("%I:%M %p %Z")
-        max_hold_time = (mkt_open_dt + timedelta(hours=4)).strftime("%I:%M %p %Z") # 4 hours max for intraday options
+            # HARD LIMIT FIX: If Target calculation extends past market close, tell the user it carries forward
+            if target_time_local > mkt_close_dt and "-USD" not in ticker_symbol:
+                return "Carry Forward (Next Day)"
+            return target_time_local.strftime("%I:%M %p %Z")
 
         # ---------------------------------------------------------
         # SECTION 1: TRADING SIGNALS & TECHNICALS
@@ -311,10 +324,10 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
         with col_opt:
             st.subheader("🎯 Options Execution Plan")
             st.info(f"**Action:** {opt_rec}  \n**Est. Return ROI:** {est_return}")
-            st.markdown(f"**🕒 Optimal Entry Time:** After `{opt_entry_time}` (Wait for trend confirmation)  \n**⏳ Maximum Safe Holding Time:** Exit before `{max_hold_time}` to avoid theta decay.")
+            st.markdown(f"**🕒 Optimal Entry Time:** After `{opt_entry_time}` (Wait for trend confirmation)  \n**⏳ Maximum Safe Holding Time:** Exit before `{max_hold_time}` to avoid end-of-day theta decay & chaos.")
 
         st.subheader("📐 High-Precision Mathematical Targets (Levels 1 to 5)")
-        st.markdown(f"*All Target Expected Hit Times are shown in the Official Market Local Time ({mkt_tz.zone}).*")
+        st.markdown(f"*All Target Expected Hit Times are bound to Official Market Local Time ({mkt_tz.zone}).*")
         g1, g2 = st.columns(2)
         with g1:
             st.success(f"🟢 LONG TRADING SETUP (CE)")
@@ -364,7 +377,6 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
         if conjunctions:
             st.info("**Active D1 Conjunctions:** " + " | ".join([f"{s}: {' + '.join(pls)}" for s, pls in conjunctions.items()]))
 
-        # Format astrology timezone strings based on Market location
         st.subheader(f"☀️🌙 Special Focus: Sun & Moon Upcoming Ingress ({mkt_tz.zone})")
         sm_col1, sm_col2 = st.columns(2)
         with sm_col1:
@@ -410,10 +422,8 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
         
         with st.expander("Run Custom Historical Backtest", expanded=False):
             bt_col1, bt_col2, bt_col3 = st.columns(3)
-            # Added exact timeframe options requested
             bt_tf = bt_col1.selectbox("Backtest Timeframe", ["1m", "5m", "10m", "15m", "30m", "45m", "1h", "1d", "1mo"])
             
-            # Smart default start dates to prevent Yahoo Finance API limits based on timeframe selected
             if bt_tf == "1m": def_days = 5
             elif bt_tf in ["5m", "10m", "15m", "30m", "45m"]: def_days = 45
             elif bt_tf == "1h": def_days = 700
@@ -426,7 +436,6 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
             if st.button("🚀 Run Advanced Backtest", type="secondary"):
                 with st.spinner("Fetching data and running simulations..."):
                     
-                    # Hard API limit checks to prevent crashing
                     days_diff = (datetime.now().date() - bt_start).days
                     if bt_tf == "1m" and days_diff > 7:
                         st.error("Yahoo Finance restricts 1-minute data to the last 7 days. Please change the Start Date.")
@@ -480,10 +489,9 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
                             bc3.metric("Short Target 1 Hit Rate", f"{(hits_short/total_periods)*100:.1f}%")
                             
                             st.markdown("### Scrollable Trade Log Matrix")
-                            st.markdown("### Scrollable Trade Log Matrix")
                             st.dataframe(pd.DataFrame(results), use_container_width=True, height=300)
                         else:
                             st.error("Not enough historical data available from Yahoo Finance for this specific time period.")
 
     except Exception as e:
-        st.error(f"❌ Execution Engine Error: {str(e)}.")
+        st.error(f"❌ Execution Engine Error: {str(e)}. Please check inputs.")

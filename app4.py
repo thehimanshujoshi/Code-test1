@@ -175,7 +175,7 @@ target_dt = datetime(target_date.year, target_date.month, target_date.day)
 
 open_price_type = st.sidebar.radio("Opening Price Type", ["Auto-Fetch Previous Close", "Manual Override Price"])
 manual_open_val = st.sidebar.number_input("Enter Manual Price", value=0.0, step=0.05) if open_price_type == "Manual Override Price" else 0.0
-      st.title(f"📈 Gann Execution Matrix: {display_name}")
+st.title(f"📈 Gann Execution Matrix: {display_name}")
 
 with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_name}..."):
     try:

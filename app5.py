@@ -183,8 +183,20 @@ trader_type = st.sidebar.radio("Options Trading Style", ["Option Buyer (CE/PE Bu
 target_date = st.sidebar.date_input("Execution Date", datetime.now().date())
 target_dt = datetime(target_date.year, target_date.month, target_date.day)
 
-open_price_type = st.sidebar.radio("Opening Price Type", ["Auto-Fetch Previous Close", "Manual Override Price"])
-manual_open_val = st.sidebar.number_input("Enter Manual Price", value=0.0, step=0.05) if open_price_type == "Manual Override Price" else 0.0st.title(f"📈 Gann Execution Matrix: {display_name}")
+open_price_type = st.sidebar.radio("Opening Price Type", 
+                                   ["Auto-Fetch Previous Close", "Manual Override Price"])
+
+# Manual Open Price Handling
+if open_price_type == "Manual Override Price":
+    manual_open_val = st.sidebar.number_input(
+        "Enter Manual Price", 
+        value=0.0, 
+        step=0.05
+    )
+else:
+    manual_open_val = 0.0
+
+st.title(f"📈 Gann Execution Matrix: {display_name}")
 
 with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_name}..."):
     try:

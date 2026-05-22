@@ -17,16 +17,16 @@ st.set_page_config(page_title="Astro-Gann Execution Matrix", page_icon="📈", l
 # 🌍 DYNAMIC TIMEZONE & MARKET ENGINE
 # ==========================================
 def get_market_context(ticker, target_dt):
-    # Determine timezone and exact opening time based on the ticker symbol
-    if ticker in ["^GSPC", "^DJI", "^IXIC"] or (not ticker.endswith(".NS") and not ticker.endswith(".BO") and "-USD" not in ticker and "=" not in ticker):
-        tz = pytz.timezone("America/New_York")
-        open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 9, 30))
-    elif "-USD" in ticker or "=" in ticker:
-        tz = pytz.timezone("UTC")
-        open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 0, 0)) # Crypto runs 24/7 on UTC
-    else:
+    # FIXED: Explicitly handle Nifty and Bank Nifty index symbols
+    if ticker in ["^NSEI", "^NSEBANK"] or ticker.endswith(".NS") or ticker.endswith(".BO"):
         tz = pytz.timezone("Asia/Kolkata")
         open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 9, 15))
+    elif "-USD" in ticker or "=" in ticker:
+        tz = pytz.timezone("UTC")
+        open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 0, 0)) # Crypto runs 24/7
+    else:
+        tz = pytz.timezone("America/New_York")
+        open_time = tz.localize(datetime(target_dt.year, target_dt.month, target_dt.day, 9, 30))
     return tz, open_time
 
 # ==========================================
@@ -193,6 +193,7 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
         now_local = now_utc.astimezone(mkt_tz)
         now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
         
+        # Display correctly mapped timezones
         st.markdown(f"**⏰ Exchange Local Time:** `{now_local.strftime('%I:%M %p %Z')}` | **🇮🇳 IST Equivalent:** `{now_ist.strftime('%I:%M %p IST')}`")
 
         target_date_str = target_dt.strftime("%Y-%m-%d")
@@ -282,13 +283,19 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
             else: opt_rec = f"Short Strangle/Straddle near `{atm_strike}`"
             est_return = "Max Premium Decay (Theta)"
 
-        # Time Estimator (Now formatting with %Z to clearly state the Timezone)
+        # --- TIMING CALCULATOR FOR ENTRY & EXITS ---
         avg_candle_pts = abs(df_intra['High'].iloc[-15:].mean() - df_intra['Low'].iloc[-15:].mean())
         mins_per_candle = int(interval_used.replace('m','').replace('h','60'))
+        
         def est_time(target_pts):
             candles = max(1, target_pts / max(1, avg_candle_pts))
             target_time_local = mkt_open_dt + timedelta(minutes=candles * mins_per_candle)
             return target_time_local.strftime("%I:%M %p %Z") # Displays EDT, IST, etc.
+            
+        # Entry/Exit Recommendation Logic
+        entry_wait_mins = mins_per_candle * 2  # Wait for first 2 candles to close
+        opt_entry_time = (mkt_open_dt + timedelta(minutes=entry_wait_mins)).strftime("%I:%M %p %Z")
+        max_hold_time = (mkt_open_dt + timedelta(hours=4)).strftime("%I:%M %p %Z") # 4 hours max for intraday options
 
         # ---------------------------------------------------------
         # SECTION 1: TRADING SIGNALS & TECHNICALS
@@ -304,9 +311,10 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
         with col_opt:
             st.subheader("🎯 Options Execution Plan")
             st.info(f"**Action:** {opt_rec}  \n**Est. Return ROI:** {est_return}")
+            st.markdown(f"**🕒 Optimal Entry Time:** After `{opt_entry_time}` (Wait for trend confirmation)  \n**⏳ Maximum Safe Holding Time:** Exit before `{max_hold_time}` to avoid theta decay.")
 
         st.subheader("📐 High-Precision Mathematical Targets (Levels 1 to 5)")
-        st.markdown(f"*All Target Expected Hit Times are shown in the Official Market Local Time.*")
+        st.markdown(f"*All Target Expected Hit Times are shown in the Official Market Local Time ({mkt_tz.zone}).*")
         g1, g2 = st.columns(2)
         with g1:
             st.success(f"🟢 LONG TRADING SETUP (CE)")
@@ -402,16 +410,30 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
         
         with st.expander("Run Custom Historical Backtest", expanded=False):
             bt_col1, bt_col2, bt_col3 = st.columns(3)
-            bt_tf = bt_col1.selectbox("Backtest Timeframe", ["1h", "1d", "1mo"])
+            # Added exact timeframe options requested
+            bt_tf = bt_col1.selectbox("Backtest Timeframe", ["1m", "5m", "10m", "15m", "30m", "45m", "1h", "1d", "1mo"])
             
-            default_start = datetime.now().date() - timedelta(days=365) if bt_tf != "1h" else datetime.now().date() - timedelta(days=180)
+            # Smart default start dates to prevent Yahoo Finance API limits based on timeframe selected
+            if bt_tf == "1m": def_days = 5
+            elif bt_tf in ["5m", "10m", "15m", "30m", "45m"]: def_days = 45
+            elif bt_tf == "1h": def_days = 700
+            else: def_days = 1000
+            
+            default_start = datetime.now().date() - timedelta(days=def_days)
             bt_start = bt_col2.date_input("Start Date", default_start)
             bt_end = bt_col3.date_input("End Date", datetime.now().date())
             
             if st.button("🚀 Run Advanced Backtest", type="secondary"):
                 with st.spinner("Fetching data and running simulations..."):
-                    if bt_tf == "1h" and (datetime.now().date() - bt_start).days > 720:
-                        st.error("Yahoo Finance restricts 1-hour data to the last 730 days. Please select a closer Start Date.")
+                    
+                    # Hard API limit checks to prevent crashing
+                    days_diff = (datetime.now().date() - bt_start).days
+                    if bt_tf == "1m" and days_diff > 7:
+                        st.error("Yahoo Finance restricts 1-minute data to the last 7 days. Please change the Start Date.")
+                    elif bt_tf in ["5m", "10m", "15m", "30m", "45m"] and days_diff > 60:
+                        st.error("Yahoo Finance restricts intraday data (under 1h) to the last 60 days. Please change the Start Date.")
+                    elif bt_tf == "1h" and days_diff > 730:
+                        st.error("Yahoo Finance restricts 1-hour data to the last 730 days. Please change the Start Date.")
                     else:
                         bt_data = fetch_backtest_data(ticker_symbol, bt_start.strftime("%Y-%m-%d"), bt_end.strftime("%Y-%m-%d"), bt_tf)
                         
@@ -460,8 +482,7 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
                             st.markdown("### Scrollable Trade Log Matrix")
                             st.dataframe(pd.DataFrame(results), use_container_width=True, height=300)
                         else:
-                            st.error("Not enough historical data available from Yahoo Finance for this time period.")
+                            st.error("Not enough historical data available from Yahoo Finance for this specific time period.")
 
     except Exception as e:
-        st.error(f"❌ Execution Engine Error: {str(e)}. Please check inputs.")
-      
+        st.error(f"❌ Execution Engine Error: {str(e)}.

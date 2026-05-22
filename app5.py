@@ -480,9 +480,10 @@ with st.spinner(f"Compiling High-Precision Mathematical Targets for {display_nam
                             bc3.metric("Short Target 1 Hit Rate", f"{(hits_short/total_periods)*100:.1f}%")
                             
                             st.markdown("### Scrollable Trade Log Matrix")
+                            st.markdown("### Scrollable Trade Log Matrix")
                             st.dataframe(pd.DataFrame(results), use_container_width=True, height=300)
                         else:
                             st.error("Not enough historical data available from Yahoo Finance for this specific time period.")
 
     except Exception as e:
-st.error(f"❌ Execution Engine Error: {str(e)}.
+        st.error(f"❌ Execution Engine Error: {str(e)}.")

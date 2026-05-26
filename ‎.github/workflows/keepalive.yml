@@ -1,0 +1,37 @@
+name: Stealth Keep Alive
+‎
+‎on:
+‎  schedule:
+‎    # Runs roughly every 6 hours (we will randomize the exact minute below)
+‎    - cron: '0 */6 * * *'
+‎  
+‎  workflow_dispatch: 
+‎
+‎jobs:
+‎  stealth-ping:
+‎    runs-on: ubuntu-latest
+‎    steps:
+‎      - name: Randomize and Ping Webapps
+‎        run: |
+‎          # 1. Add ALL your Streamlit app URLs inside these parentheses.
+‎          # Wrap each URL in quotes, and put each on a new line.
+‎          URLS=(
+‎            "https://cccccode-test1-v5c6twq9dtxqbrsxzzlhgr.streamlit.app/"
+‎            #""
+‎            #""
+‎          )
+‎
+‎          # 2. Loop through every URL in the list
+‎          for url in "${URLS[@]}"; do
+‎            
+‎            # Generate a random delay between 30 seconds and 5 minutes
+‎            # This ensures the server never sees requests at the exact same time
+‎            SLEEP_TIME=$((RANDOM % 300 + 30))
+‎            echo "Waiting ${SLEEP_TIME} seconds before visiting ${url}..."
+‎            sleep $SLEEP_TIME
+‎            
+‎            # 3. Ping the URL disguised as a normal Google Chrome browser
+‎            echo "Visiting ${url}..."
+‎            curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" -L -s -o /dev/null -w "HTTP Status: %{http_code}\n" "$url"
+‎            
+‎          done

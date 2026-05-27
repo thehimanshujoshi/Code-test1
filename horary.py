@@ -1,12 +1,11 @@
 import streamlit as st
 import swisseph as swe
 import pandas as pd
+import re
 from datetime import datetime
 import pytz
 from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
-
-# Advanced Local ML Libraries
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -21,6 +20,14 @@ ZODIAC_SIGNS = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", 
 RASHI_LORDS = {0: 'Mars', 1: 'Venus', 2: 'Mercury', 3: 'Moon', 4: 'Sun', 5: 'Mercury', 6: 'Venus', 7: 'Mars', 8: 'Jupiter', 9: 'Saturn', 10: 'Saturn', 11: 'Jupiter'}
 PLANET_ORBS = {'Sun': 15.0, 'Moon': 12.0, 'Mars': 8.0, 'Mercury': 7.0, 'Jupiter': 9.0, 'Venus': 7.0, 'Saturn': 9.0, 'Rahu': 0.0, 'Ketu': 0.0}
 
+# Astrological Directions (Based on Elements)
+DIRECTIONS = {
+    "Aries": "East", "Leo": "East", "Sagittarius": "East",
+    "Taurus": "South", "Virgo": "South", "Capricorn": "South",
+    "Gemini": "West", "Libra": "West", "Aquarius": "West",
+    "Cancer": "North", "Scorpio": "North", "Pisces": "North"
+}
+
 CITY_DB = {
     "Jaipur, Rajasthan (Default)": {"lat": 26.9124, "lon": 75.7873},
     "New Delhi, Delhi": {"lat": 28.6139, "lon": 77.2090},
@@ -30,15 +37,14 @@ CITY_DB = {
 }
 
 # ==========================================
-# 2. LOCAL MACHINE LEARNING ENGINE (TF-IDF)
+# 2. LOCAL MACHINE LEARNING ENGINE
 # ==========================================
-# We train the vectorizer on highly enriched contextual documents
 CORPUS_MAP = {
     "Battle": {"house": 7, "text": "win won match game versus beat team play tournament election fight compete winner lose loser victory defeat score championship trophy"},
     1: {"house": 1, "text": "myself health life appearance body recover safe danger survive me i physical well being mental state"},
     2: {"house": 2, "text": "money wealth salary bank finance speech family saving jewelry gold buy sell price expensive cheap income assets"},
     3: {"house": 3, "text": "brother sister sibling trip travel neighbor email message courage interview document contract news paper sign writing"},
-    4: {"house": 4, "text": "mother house home real estate property car vehicle land rain weather storm climate stolen lost found missing underwear keys wallet phone search"},
+    4: {"house": 4, "text": "mother house home real estate property car vehicle land rain weather storm climate stolen lost found missing underwear keys wallet phone search where is"},
     5: {"house": 5, "text": "child baby son daughter exam lottery romance love date dating stock crypto pregnancy play fun hobby creative"},
     6: {"house": 6, "text": "disease sick illness pet dog cat enemy court debt loan surgery tenant competition lawsuit dispute medicine doctor"},
     7: {"house": 7, "text": "marriage husband wife partner business divorce relationship spouse deal agreement thief lawyer open enemy cooperate"},
@@ -49,40 +55,52 @@ CORPUS_MAP = {
     12: {"house": 12, "text": "hospital jail prison loss foreign hidden enemy sleep spiritual ashram expense charity quit isolated alone"}
 }
 
-# Pre-compute the ML models at startup to guarantee millisecond speeds
 keys = list(CORPUS_MAP.keys())
 documents = [CORPUS_MAP[k]["text"] for k in keys]
 vectorizer = TfidfVectorizer(stop_words='english')
 doc_vectors = vectorizer.fit_transform(documents)
 
 def extract_intent_ml(query):
-    """
-    Uses Term Frequency-Inverse Document Frequency (TF-IDF) and Cosine Similarity 
-    to mathematically deduce the intent of the question in less than 5 milliseconds.
-    """
     query_vec = vectorizer.transform([query.lower()])
     similarities = cosine_similarity(query_vec, doc_vectors)[0]
-    
     best_match_idx = similarities.argmax()
     best_score = similarities[best_match_idx]
     
-    # If the math finds a meaningful connection (> 0.05 semantic overlap)
     if best_score > 0.05:
         matched_key = keys[best_match_idx]
         target_house = CORPUS_MAP[matched_key]["house"]
         mode = "Battle" if matched_key == "Battle" else "Standard"
         reasoning = f"Semantic Match Score: {best_score:.2f} (Aligned with Vector Context: {matched_key})"
         return target_house, mode, reasoning
-        
     return 1, "Standard", "Low semantic match. Defaulting to 1st House (General/Self)."
 
 # ==========================================
-# 3. CORE ASTRONOMICAL CALCULATIONS
+# 3. CORE ASTRONOMICAL & VARGA CALCULATIONS
 # ==========================================
+def get_d9_sign(degree):
+    """Calculates Navamsha (D9) Sign."""
+    sign = int(degree / 30)
+    deg_in_sign = degree % 30
+    nav_idx = int(deg_in_sign / (30/9))
+    sign_type = sign % 3 
+    if sign_type == 0: start_sign = sign
+    elif sign_type == 1: start_sign = (sign + 8) % 12
+    else: start_sign = (sign + 4) % 12
+    return ZODIAC_SIGNS[(start_sign + nav_idx) % 12]
+
+def get_d3_sign(degree):
+    """Calculates Drekkana (D3) Sign for Lost Items."""
+    sign = int(degree / 30)
+    deg_in_sign = degree % 30
+    drek_idx = int(deg_in_sign / 10)
+    if drek_idx == 0: return ZODIAC_SIGNS[sign]
+    elif drek_idx == 1: return ZODIAC_SIGNS[(sign + 4) % 12]
+    else: return ZODIAC_SIGNS[(sign + 8) % 12]
+
 @st.cache_data(ttl=3600)
 def geocode_location(city_name):
     try:
-        geolocator = Nominatim(user_agent="prashna_ml_engine")
+        geolocator = Nominatim(user_agent="prashna_ml_engine_final")
         location = geolocator.geocode(city_name)
         if location: return location.latitude, location.longitude
     except Exception:
@@ -100,15 +118,25 @@ def get_julian_day(dt, lat, lon):
 
 def calculate_chart(jd, lat, lon):
     positions = {}
-    flag = swe.FLG_SWIEPH | swe.FLG_SIDEREAL 
+    # swe.FLG_SPEED added for exact planetary velocity
+    flag = swe.FLG_SWIEPH | swe.FLG_SIDEREAL | swe.FLG_SPEED
     for p_id, p_name in PLANETS.items():
         if p_id in [10, 11]:
             calc, _ = swe.calc_ut(jd, swe.TRUE_NODE, flag)
             if p_id == 11: calc = ((calc[0] + 180.0) % 360.0, 0, 0, 0, 0, 0)
         else:
             calc, _ = swe.calc_ut(jd, p_id, flag)
+            
         sign_idx = int(calc[0] // 30)
-        positions[p_name] = {'Longitude': calc[0], 'Sign': ZODIAC_SIGNS[sign_idx], 'Degree': calc[0] % 30, 'Speed': calc[3], 'Retrograde': calc[3] < 0}
+        positions[p_name] = {
+            'Longitude': calc[0], 
+            'Sign': ZODIAC_SIGNS[sign_idx], 
+            'Degree': calc[0] % 30, 
+            'Speed': calc[3], 
+            'Retrograde': calc[3] < 0,
+            'D9_Sign': get_d9_sign(calc[0]),
+            'D3_Sign': get_d3_sign(calc[0])
+        }
     cusps, ascmc = swe.houses_ex(jd, lat, lon, b'W', flag)
     return positions, ascmc[0]
 
@@ -127,6 +155,7 @@ def check_aspect(p1, p2, positions):
 def evaluate_battle(positions, lagnesh, karyesh):
     p1, p2 = positions[lagnesh], positions[karyesh]
     score1, score2 = 0, 0
+    
     if abs(p1['Speed']) > abs(p2['Speed']): score1 += 1
     else: score2 += 1
     if p1['Retrograde']: score1 -= 1
@@ -134,32 +163,54 @@ def evaluate_battle(positions, lagnesh, karyesh):
     if lagnesh in ['Jupiter', 'Venus', 'Sun']: score1 += 1
     if karyesh in ['Jupiter', 'Venus', 'Sun']: score2 += 1
 
-    if score1 > score2: return "TEAM 1 / FIRST OPTION WINS", "The 1st House Lord possesses mathematically superior velocity and dignity."
-    elif score2 > score1: return "TEAM 2 / SECOND OPTION WINS", "The opponent's 7th House Lord carries overwhelming forward momentum."
+    # TIE BREAKER RULE
+    if score1 == score2:
+        if abs(p1['Speed']) > abs(p2['Speed']):
+            score1 += 0.5
+        else:
+            score2 += 0.5
+
+    if score1 > score2: 
+        return "TEAM 1 / FIRST OPTION WINS", "The 1st House Lord possesses mathematically superior velocity and dignity."
+    elif score2 > score1: 
+        return "TEAM 2 / SECOND OPTION WINS", "The opponent's 7th House Lord carries overwhelming forward momentum."
     return "TIE / EXTREMELY CLOSE MATCH", "Planetary strengths are gridlocked. Expect an unpredictable finish."
 
-def evaluate_standard(positions, lagnesh, karyesh):
-    if lagnesh == karyesh: return "YES / HIGHLY FAVORABLE", "Energies are self-signifying. You are in systemic control of this outcome."
+def evaluate_standard(positions, lagnesh, karyesh, target_house):
+    report_extra = ""
+    
+    # Lost Item Logic (4th House)
+    if target_house == 4:
+        item_lord = positions[karyesh]
+        d3_sign = item_lord['D3_Sign']
+        direction = DIRECTIONS.get(d3_sign, "Unknown")
+        report_extra = f"\n\n🧭 **Lost Item Radar:** The item is likely located in the **{direction}** direction. (Based on Drekkana/D3 analysis of the 4th Lord)."
+
+    if lagnesh == karyesh: 
+        return "YES / HIGHLY FAVORABLE", "Energies are self-signifying. You are in systemic control of this outcome." + report_extra
+    
     has_aspect, asp_name = check_aspect(lagnesh, karyesh, positions)
     if has_aspect:
         p1, p2 = positions[lagnesh], positions[karyesh]
         fast_p, slow_p = (p1, p2) if abs(p1['Speed']) > abs(p2['Speed']) else (p2, p1)
-        if fast_p['Degree'] < slow_p['Degree']: return "YES / SUCCESS", "An applying cosmic connection indicates active manifestation."
-        return "NO / DELAYED", "The aspect configuration is separating. The prime window has shifted."
-    return "NO / UNFAVORABLE", "Zero aspectual connection exists between the querent and the objective."
+        if fast_p['Degree'] < slow_p['Degree']: 
+            return "YES / SUCCESS", "An applying cosmic connection indicates active manifestation." + report_extra
+        return "NO / DELAYED", "The aspect configuration is separating. The prime window has shifted." + report_extra
+        
+    return "NO / UNFAVORABLE", "Zero aspectual connection exists between the querent and the objective." + report_extra
 
 # ==========================================
 # 5. STREAMLIT USER INTERFACE
 # ==========================================
 def main():
     st.title("⚡ Advanced ML Prashna Engine")
-    st.markdown("Features local machine learning (TF-IDF Vectorization) for instant, 100% private semantic analysis without cloud APIs.")
+    st.markdown("Features local machine learning, D9/D3 Varga sub-charts, exact orbital speeds, and lost-item directional logic.")
     
     col1, col2 = st.columns([1, 2.5])
     
     with col1:
         st.header("1. Your Question")
-        user_query = st.text_area("Ask anything naturally:", placeholder="Will I secure my dream career? Did my neighbor steal the package? Who wins tonight?")
+        user_query = st.text_area("Ask anything naturally:", placeholder="Where are my lost keys? Who wins tonight? Will I get the job?")
         
         st.write("---")
         with st.expander("⚙️ Manual Override"):
@@ -187,9 +238,8 @@ def main():
         generate = st.button("🔮 Calculate Matrix", type="primary", use_container_width=True)
 
     if generate and user_query:
-        with st.spinner("Executing Local Machine Learning Vectors..."):
+        with st.spinner("Calculating Sub-Charts and ML Vectors..."):
             
-            # Sub-millisecond ML Routing
             if manual_override != "Auto-Detect via ML":
                 target_house = int(manual_override.split(":")[0])
                 query_mode = "Battle" if target_house == 7 and "Competitions" in manual_override else "Standard"
@@ -210,7 +260,7 @@ def main():
             if query_mode == "Battle":
                 verdict, reason = evaluate_battle(positions, lagnesh, karyesh)
             else:
-                verdict, reason = evaluate_standard(positions, lagnesh, karyesh)
+                verdict, reason = evaluate_standard(positions, lagnesh, karyesh, target_house)
             
             with col2:
                 st.header("The Answer")
@@ -226,14 +276,14 @@ def main():
                     
                 st.write("**Astrological Breakdown:** " + reason)
                 
-                with st.expander("View Scientific Coordinates"):
+                with st.expander("View Scientific Coordinates (Including D9 & D3)"):
                     st.write("**Ascendant (Lagna) Lord:** " + lagnesh)
                     st.write("**Objective House Lord:** " + karyesh)
                     df = pd.DataFrame.from_dict(positions, orient='index')
                     df['Longitude'] = df['Longitude'].apply(lambda x: f"{x:.2f}°")
-                    df['Speed'] = df['Speed'].apply(lambda x: f"{x:.3f}")
+                    df['Speed'] = df['Speed'].apply(lambda x: f"{x:.3f}°/day")
                     df['Retrograde'] = df['Retrograde'].apply(lambda x: "Yes" if x else "No")
-                    st.dataframe(df[['Sign', 'Degree', 'Retrograde', 'Speed']], use_container_width=True)
+                    st.dataframe(df[['Sign', 'Degree', 'Speed', 'Retrograde', 'D9_Sign', 'D3_Sign']], use_container_width=True)
 
     elif generate and not user_query:
         st.error("Please provide a query for the ML engine to evaluate.")

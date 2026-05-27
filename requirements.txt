@@ -4,3 +4,8 @@ pandas
 mplfinance
 pyswisseph
 pytz
+numpy
+ephem
+plotly
+scikit-learn
+

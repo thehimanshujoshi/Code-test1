@@ -1,6 +1,7 @@
 """
 Financial Astrology ML Predictor – Streamlit Web App
-Robust, working version with geocentric positions and caching.
+Robust, backtest‑ready version. Uses geocentric planetary positions and
+supports historical prediction (backtesting) via the date picker.
 """
 
 import streamlit as st
@@ -37,12 +38,15 @@ RULING = {
     "GOLD": "Sun", "CRUDE": "Saturn", "SILVER": "Moon"
 }
 
-# ============== EPHEMERIS UTILITIES (GEOCENTRIC BY DEFAULT) ==============
-def planet_longitude(planet_name, date_ephem):
-    """Return geocentric ecliptic longitude (degrees) for planet at given ephem.Date."""
+# ============== EPHEMERIS UTILITIES (GEOCENTRIC) ==============
+def geocentric_lon(planet_name, date_ephem):
+    """Return geocentric ecliptic longitude (degrees) for a planet at given ephem.Date."""
     body = getattr(ephem, planet_name)()
-    body.compute(date_ephem)  # default is geocentric
-    return np.degrees(body.hlong)  # ecliptic longitude
+    body.compute(date_ephem)                         # geocentric by default
+    # Convert equatorial RA/Dec to ecliptic longitude
+    eq = ephem.Equatorial(body.a_ra, body.a_dec, epoch=ephem.J2000)
+    ecl = ephem.Ecliptic(eq)
+    return np.degrees(ecl.lon)
 
 def nakshatra(lon):
     idx = int(lon // (360.0 / 27))
@@ -61,13 +65,12 @@ def is_retrograde(planet_name, date_ephem, delta_hours=1):
     """Check if planet is retrograde by comparing longitudes over a small interval."""
     if planet_name in ["Sun", "Moon"]:
         return False
-    lon1 = planet_longitude(planet_name, date_ephem)
-    lon2 = planet_longitude(planet_name, ephem.Date(date_ephem + delta_hours/24))
-    # If longitude decreases, retrograde (account for 360° wrap)
-    return (lon2 - lon1) < 0
+    lon1 = geocentric_lon(planet_name, date_ephem)
+    lon2 = geocentric_lon(planet_name, ephem.Date(date_ephem + delta_hours/24))
+    return lon2 < lon1  # true if longitude decreased
 
 def aspect_angle(lon1, lon2):
-    """Return angular separation in degrees (0-180)."""
+    """Return angular separation in degrees (0–180)."""
     angle = abs(lon1 - lon2) % 360
     if angle > 180:
         angle = 360 - angle
@@ -84,37 +87,44 @@ def major_aspect(angle, orb=4):
     return None
 
 def is_voc_moon(date_ephem, max_search_hours=48):
-    """Check if Moon is Void-of-Course at given time.
-       VOC occurs when the Moon makes no major aspects before changing sign."""
+    """True if Moon is Void‑of‑Course at given time.
+       VOC: Moon makes no major aspect before it changes sign."""
     moon = ephem.Moon()
     moon.compute(date_ephem)
-    start_sign = zodiac_sign(np.degrees(moon.hlong))
-    # search for next sign change within max_search_hours
-    end_time = ephem.Date(date_ephem + max_search_hours/24)
+    start_lon = np.degrees(ephem.Ecliptic(ephem.Equatorial(moon.a_ra, moon.a_dec, epoch=ephem.J2000)).lon)
+    start_sign = zodiac_sign(start_lon)
+
+    # Find the time of the next sign change (search up to max_search_hours)
+    end_time = ephem.Date(date_ephem + max_search_hours / 24)
     t = date_ephem
     next_sign_time = None
     while t < end_time:
         moon.compute(t)
-        sign = zodiac_sign(np.degrees(moon.hlong))
-        if sign != start_sign:
+        ecl = ephem.Ecliptic(ephem.Equatorial(moon.a_ra, moon.a_dec, epoch=ephem.J2000))
+        lon = np.degrees(ecl.lon)
+        if zodiac_sign(lon) != start_sign:
             next_sign_time = t
             break
-        t = ephem.Date(t + 10/1440)  # +10 minutes
+        t = ephem.Date(t + 10/1440)  # step 10 minutes
+
     if not next_sign_time:
         return False
-    # check if any major aspect occurs between date_ephem and next_sign_time
+
+    # Check if any major aspect (1° orb) occurs between date_ephem and next_sign_time
     t = date_ephem
     while t <= next_sign_time:
-        moon_lon = np.degrees(ephem.Moon().compute(t).hlong)
+        moon.compute(t)
+        moon_ecl = ephem.Ecliptic(ephem.Equatorial(moon.a_ra, moon.a_dec, epoch=ephem.J2000))
+        moon_lon = np.degrees(moon_ecl.lon)
         for p in PLANETS:
             if p == "Moon":
                 continue
-            p_body = getattr(ephem, p)()
-            p_body.compute(t)
-            p_lon = np.degrees(p_body.hlong)
+            body = getattr(ephem, p)()
+            body.compute(t)
+            p_ecl = ephem.Ecliptic(ephem.Equatorial(body.a_ra, body.a_dec, epoch=ephem.J2000))
+            p_lon = np.degrees(p_ecl.lon)
             angle = aspect_angle(moon_lon, p_lon)
-            if major_aspect(angle, orb=1):  # tight orb for VOC
-                # aspect occurs after start time
+            if major_aspect(angle, orb=1):
                 return False
         t = ephem.Date(t + 5/1440)  # step 5 minutes
     return True
@@ -122,21 +132,21 @@ def is_voc_moon(date_ephem, max_search_hours=48):
 # ================== FEATURE COMPUTATION (CACHED) ==================
 @st.cache_data(ttl=3600)
 def compute_astro_features(dates):
-    """Build astrological feature DataFrame for a list of dates (fast)."""
+    """Build astrological feature DataFrame for a list of dates."""
     rows = []
     for d in dates:
         dt = ephem.Date(d)
         row = {"date": d}
         lons = {}
         for p in PLANETS:
-            lon = planet_longitude(p, dt)
+            lon = geocentric_lon(p, dt)
             lons[p] = lon
             row[f"{p}_lon"] = lon
             row[f"{p}_sign"] = zodiac_sign(lon)
             row[f"{p}_nakshatra"] = nakshatra(lon)
             row[f"{p}_retro"] = is_retrograde(p, dt)
         row["moon_phase"] = moon_phase(dt)
-        row["moon_voc"] = is_voc_moon(dt)  # compute VOC for all dates (fast enough)
+        row["moon_voc"] = is_voc_moon(dt)
         # Aspects
         aspects = []
         for i_p1, p1 in enumerate(PLANETS):
@@ -161,7 +171,7 @@ def fetch_price_data(ticker, start, end):
         import yfinance as yf
         df = yf.download(ticker, start=start, end=end, progress=False)
         if df.empty:
-            raise ValueError("No data")
+            raise ValueError("No data returned")
         df = df[['Open', 'High', 'Low', 'Close']].dropna()
         return df
     except Exception as e:
@@ -249,14 +259,18 @@ def feature_importance_text(model, feature_names, top_n=10):
 # ================== STREAMLIT UI ==================
 st.set_page_config(page_title="Astro-ML Market Oracle", layout="wide")
 st.title("🔮 Financial Astrology & ML Market Predictor")
-st.markdown("Predict next‑day market moves using a Random Forest trained on **geocentric** planetary positions, Nakshatras, retrogrades, and aspects.")
+st.markdown("""
+Predict next‑day market moves using a Random Forest trained on **geocentric** planetary positions,
+Nakshatras, retrogrades, and aspects.  
+**Backtesting:** Simply choose a past date in the *Prediction Date* field to see what the model would have predicted.
+""")
 
-# Sidebar inputs
+# Sidebar
 ticker = st.sidebar.text_input("Ticker Symbol", value="NIFTY").upper()
 start_date = st.sidebar.date_input("Start Date", datetime(2020, 1, 1))
 end_date = st.sidebar.date_input("End Date", datetime.today())
-predict_date = st.sidebar.date_input("Prediction Date", datetime.today() + timedelta(days=1))
-st.sidebar.info("Synthetic data used if live data unavailable. Astrological calculations are geocentric.")
+predict_date = st.sidebar.date_input("Prediction Date (for backtesting, pick a past date)", datetime.today() + timedelta(days=1))
+st.sidebar.info("Synthetic data used if live data unavailable. Geocentric calculations are approximate.")
 
 if st.sidebar.button("Train Model & Analyse"):
     try:
@@ -268,7 +282,7 @@ if st.sidebar.button("Train Model & Analyse"):
             dates = price_df.index.tolist()
             last_close = price_df['Close'].iloc[-1]
 
-        with st.spinner("Computing astrological features (may take a few seconds) ..."):
+        with st.spinner("Computing astrological features (may take a minute for long ranges)..."):
             astro_df = compute_astro_features(dates)
 
         with st.spinner("Defining targets and training model..."):
@@ -299,6 +313,8 @@ if st.sidebar.button("Train Model & Analyse"):
             st.session_state.pred_feat = pred_feat.iloc[0]
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         st.stop()
 
 # Display results if trained

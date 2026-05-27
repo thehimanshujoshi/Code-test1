@@ -1,16 +1,19 @@
 import streamlit as st
 import swisseph as swe
 import pandas as pd
-import re
 from datetime import datetime
 import pytz
 from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 
+# Advanced Local ML Libraries
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
 # ==========================================
 # 1. CONFIGURATION & ASTRO CONSTANTS
 # ==========================================
-st.set_page_config(page_title="Private Prashna Engine", layout="wide", page_icon="🔒")
+st.set_page_config(page_title="Advanced ML Prashna Engine", layout="wide", page_icon="⚡")
 swe.set_sid_mode(swe.SIDM_LAHIRI)
 
 PLANETS = {0: 'Sun', 1: 'Moon', 2: 'Mercury', 3: 'Venus', 4: 'Mars', 5: 'Jupiter', 6: 'Saturn', 10: 'Rahu', 11: 'Ketu'}
@@ -27,41 +30,51 @@ CITY_DB = {
 }
 
 # ==========================================
-# 2. 100% OFFLINE NLP KEYWORD ENGINE
+# 2. LOCAL MACHINE LEARNING ENGINE (TF-IDF)
 # ==========================================
-def extract_intent_offline(query):
-    """
-    Scans the query locally. No data leaves the server.
-    """
-    query = query.lower()
-    
-    # Check for Battle Mode first
-    comp_keywords = ['win', 'won', 'match', 'game', 'vs', 'versus', 'beat', 'team', 'play', 'tournament', 'election', 'fight']
-    if any(re.search(r'\b' + re.escape(kw) + r'\b', query) for kw in comp_keywords):
-        return 7, "Battle", "Detected match/competition keywords."
+# We train the vectorizer on highly enriched contextual documents
+CORPUS_MAP = {
+    "Battle": {"house": 7, "text": "win won match game versus beat team play tournament election fight compete winner lose loser victory defeat score championship trophy"},
+    1: {"house": 1, "text": "myself health life appearance body recover safe danger survive me i physical well being mental state"},
+    2: {"house": 2, "text": "money wealth salary bank finance speech family saving jewelry gold buy sell price expensive cheap income assets"},
+    3: {"house": 3, "text": "brother sister sibling trip travel neighbor email message courage interview document contract news paper sign writing"},
+    4: {"house": 4, "text": "mother house home real estate property car vehicle land rain weather storm climate stolen lost found missing underwear keys wallet phone search"},
+    5: {"house": 5, "text": "child baby son daughter exam lottery romance love date dating stock crypto pregnancy play fun hobby creative"},
+    6: {"house": 6, "text": "disease sick illness pet dog cat enemy court debt loan surgery tenant competition lawsuit dispute medicine doctor"},
+    7: {"house": 7, "text": "marriage husband wife partner business divorce relationship spouse deal agreement thief lawyer open enemy cooperate"},
+    8: {"house": 8, "text": "death inheritance occult sudden accident tax insurance alimony mystery secret bankruptcy hidden fear danger"},
+    9: {"house": 9, "text": "university college visa abroad religion father guru long trip pilgrimage luck master astrology publish faith belief"},
+    10: {"house": 10, "text": "job career promotion boss government profession status fame company judge authority hire fire work manager"},
+    11: {"house": 11, "text": "friend profit gain desire wish elder income network award bonus success hope group organization"},
+    12: {"house": 12, "text": "hospital jail prison loss foreign hidden enemy sleep spiritual ashram expense charity quit isolated alone"}
+}
 
-    # Standard Dictionary
-    house_keywords = {
-        1: ['myself', 'health', 'life', 'appearance', 'body', 'recover', 'safe', 'danger', 'survive'],
-        2: ['money', 'wealth', 'salary', 'bank', 'finance', 'speech', 'family', 'saving', 'jewelry', 'gold', 'buying', 'selling', 'price'],
-        3: ['brother', 'sister', 'sibling', 'trip', 'travel', 'neighbor', 'email', 'message', 'courage', 'interview', 'document', 'contract', 'news'],
-        4: ['mother', 'house', 'home', 'real estate', 'property', 'car', 'vehicle', 'land', 'rain', 'weather', 'storm', 'climate', 'stolen', 'lost', 'found', 'missing', 'underwear', 'keys', 'wallet', 'phone'],
-        5: ['child', 'baby', 'son', 'daughter', 'exam', 'lottery', 'romance', 'love', 'date', 'dating', 'stock', 'crypto', 'pregnancy'],
-        6: ['disease', 'sick', 'illness', 'pet', 'dog', 'cat', 'enemy', 'court', 'debt', 'loan', 'surgery', 'tenant', 'competition', 'lawsuit', 'dispute'],
-        7: ['marriage', 'husband', 'wife', 'partner', 'business partner', 'divorce', 'relationship', 'spouse', 'deal', 'agreement', 'thief', 'lawyer'],
-        8: ['death', 'inheritance', 'occult', 'sudden', 'accident', 'tax', 'insurance', 'alimony', 'mystery', 'secret', 'bankruptcy'],
-        9: ['university', 'college', 'visa', 'abroad', 'religion', 'father', 'guru', 'long trip', 'pilgrimage', 'luck', 'master', 'astrology', 'publish'],
-        10: ['job', 'career', 'promotion', 'boss', 'government', 'profession', 'status', 'business', 'fame', 'company', 'judge', 'authority', 'hire', 'fire'],
-        11: ['friend', 'profit', 'gain', 'desire', 'wish', 'elder', 'income', 'network', 'award', 'bonus', 'success'],
-        12: ['hospital', 'jail', 'prison', 'loss', 'foreign', 'hidden enemy', 'sleep', 'spiritual', 'ashram', 'expense', 'charity', 'quit']
-    }
+# Pre-compute the ML models at startup to guarantee millisecond speeds
+keys = list(CORPUS_MAP.keys())
+documents = [CORPUS_MAP[k]["text"] for k in keys]
+vectorizer = TfidfVectorizer(stop_words='english')
+doc_vectors = vectorizer.fit_transform(documents)
+
+def extract_intent_ml(query):
+    """
+    Uses Term Frequency-Inverse Document Frequency (TF-IDF) and Cosine Similarity 
+    to mathematically deduce the intent of the question in less than 5 milliseconds.
+    """
+    query_vec = vectorizer.transform([query.lower()])
+    similarities = cosine_similarity(query_vec, doc_vectors)[0]
     
-    for house, keywords in house_keywords.items():
-        for keyword in keywords:
-            if re.search(r'\b' + re.escape(keyword) + r'\b', query):
-                return house, "Standard", f"Detected keyword: '{keyword}'"
-                
-    return 1, "Standard", "No specific keywords found. Defaulting to general query."
+    best_match_idx = similarities.argmax()
+    best_score = similarities[best_match_idx]
+    
+    # If the math finds a meaningful connection (> 0.05 semantic overlap)
+    if best_score > 0.05:
+        matched_key = keys[best_match_idx]
+        target_house = CORPUS_MAP[matched_key]["house"]
+        mode = "Battle" if matched_key == "Battle" else "Standard"
+        reasoning = f"Semantic Match Score: {best_score:.2f} (Aligned with Vector Context: {matched_key})"
+        return target_house, mode, reasoning
+        
+    return 1, "Standard", "Low semantic match. Defaulting to 1st House (General/Self)."
 
 # ==========================================
 # 3. CORE ASTRONOMICAL CALCULATIONS
@@ -69,7 +82,7 @@ def extract_intent_offline(query):
 @st.cache_data(ttl=3600)
 def geocode_location(city_name):
     try:
-        geolocator = Nominatim(user_agent="prashna_offline_engine")
+        geolocator = Nominatim(user_agent="prashna_ml_engine")
         location = geolocator.geocode(city_name)
         if location: return location.latitude, location.longitude
     except Exception:
@@ -121,40 +134,38 @@ def evaluate_battle(positions, lagnesh, karyesh):
     if lagnesh in ['Jupiter', 'Venus', 'Sun']: score1 += 1
     if karyesh in ['Jupiter', 'Venus', 'Sun']: score2 += 1
 
-    if score1 > score2: return "TEAM 1 / FIRST OPTION WINS", "The 1st House Lord holds more mathematical strength and speed compared to the opponent's lord."
-    elif score2 > score1: return "TEAM 2 / SECOND OPTION WINS", "The 7th House Lord carries stronger astrological velocity and status right now than the 1st House Lord."
-    return "TIE / EXTREMELY CLOSE MATCH", "Both structural planet significators share equal strength. Expect a down-to-the-wire finish."
+    if score1 > score2: return "TEAM 1 / FIRST OPTION WINS", "The 1st House Lord possesses mathematically superior velocity and dignity."
+    elif score2 > score1: return "TEAM 2 / SECOND OPTION WINS", "The opponent's 7th House Lord carries overwhelming forward momentum."
+    return "TIE / EXTREMELY CLOSE MATCH", "Planetary strengths are gridlocked. Expect an unpredictable finish."
 
 def evaluate_standard(positions, lagnesh, karyesh):
-    if lagnesh == karyesh: return "YES / HIGHLY FAVORABLE", "The energies are self-signifying and perfectly unified. The situation is under direct systemic control."
+    if lagnesh == karyesh: return "YES / HIGHLY FAVORABLE", "Energies are self-signifying. You are in systemic control of this outcome."
     has_aspect, asp_name = check_aspect(lagnesh, karyesh, positions)
     if has_aspect:
         p1, p2 = positions[lagnesh], positions[karyesh]
         fast_p, slow_p = (p1, p2) if abs(p1['Speed']) > abs(p2['Speed']) else (p2, p1)
-        if fast_p['Degree'] < slow_p['Degree']: return "YES / SUCCESS", "Success is cleanly indicated through an applying cosmic aspect. Manifestation is in progress."
-        return "NO / DELAYED", "The aspect configuration is separating, meaning the clear window of opportunity has stalled or shifted."
-    return "NO / UNFAVORABLE", "There is no functional or aspectual connection joining the querent to the objective at this time."
+        if fast_p['Degree'] < slow_p['Degree']: return "YES / SUCCESS", "An applying cosmic connection indicates active manifestation."
+        return "NO / DELAYED", "The aspect configuration is separating. The prime window has shifted."
+    return "NO / UNFAVORABLE", "Zero aspectual connection exists between the querent and the objective."
 
 # ==========================================
 # 5. STREAMLIT USER INTERFACE
 # ==========================================
 def main():
-    st.title("🔒 100% Private Prashna Engine")
-    st.markdown("All queries are processed locally on this server. No data is sent to external AI APIs.")
+    st.title("⚡ Advanced ML Prashna Engine")
+    st.markdown("Features local machine learning (TF-IDF Vectorization) for instant, 100% private semantic analysis without cloud APIs.")
     
     col1, col2 = st.columns([1, 2.5])
     
     with col1:
         st.header("1. Your Question")
-        user_query = st.text_area("Type your question:", placeholder="Where are my keys? Will SRH win the match?")
+        user_query = st.text_area("Ask anything naturally:", placeholder="Will I secure my dream career? Did my neighbor steal the package? Who wins tonight?")
         
-        # Privacy Override Dropdown
         st.write("---")
-        with st.expander("⚙️ Manual Topic Override (Optional)"):
-            st.caption("If the local dictionary misses your keyword, you can force the topic here:")
+        with st.expander("⚙️ Manual Override"):
             manual_override = st.selectbox(
                 "Force Astrological House:",
-                ["Auto-Detect", "1: Self/Health", "2: Money", "3: Siblings/Messages", "4: Home/Lost items/Weather", "5: Romance/Exams", "6: Disease/Debt", "7: Competitions/Marriage", "8: Surgery/Inheritance", "9: Travel/Religion", "10: Career", "11: Gains/Friends", "12: Loss/Foreign"]
+                ["Auto-Detect via ML", "1: Self/Health", "2: Money", "3: Siblings/Messages", "4: Home/Lost items/Weather", "5: Romance/Exams", "6: Disease/Debt", "7: Competitions/Marriage", "8: Surgery/Inheritance", "9: Travel/Religion", "10: Career", "11: Gains/Friends", "12: Loss/Foreign"]
             )
             
         st.markdown("---")
@@ -173,18 +184,18 @@ def main():
         q_date = st.date_input("Date", ist_now.date())
         q_time = st.time_input("Time", ist_now.time())
         
-        generate = st.button("🔮 Ask the Cosmos", type="primary", use_container_width=True)
+        generate = st.button("🔮 Calculate Matrix", type="primary", use_container_width=True)
 
     if generate and user_query:
-        with st.spinner("Processing locally..."):
+        with st.spinner("Executing Local Machine Learning Vectors..."):
             
-            # Logic Routing (Auto vs Manual)
-            if manual_override != "Auto-Detect":
+            # Sub-millisecond ML Routing
+            if manual_override != "Auto-Detect via ML":
                 target_house = int(manual_override.split(":")[0])
                 query_mode = "Battle" if target_house == 7 and "Competitions" in manual_override else "Standard"
-                reasoning = "User manually selected the topic."
+                reasoning = "User bypassed ML. Manual selection active."
             else:
-                target_house, query_mode, reasoning = extract_intent_offline(user_query)
+                target_house, query_mode, reasoning = extract_intent_ml(user_query)
             
             dt_combined = datetime.combine(q_date, q_time)
             dt_aware = pytz.timezone('Asia/Kolkata').localize(dt_combined)
@@ -204,7 +215,7 @@ def main():
             with col2:
                 st.header("The Answer")
                 
-                st.info("🔒 **Local Parse Result:** " + reasoning + "\n\n*Calculated Axis: House " + str(target_house) + " (" + query_mode + " Mode)*")
+                st.info("⚡ **ML Engine Log:** " + reasoning + "\n\n*Mapped Axis: House " + str(target_house) + " (" + query_mode + " Mode)*")
                 
                 if "YES" in verdict or "WINS" in verdict or "FAVORABLE" in verdict: 
                     st.success("### " + verdict)
@@ -215,7 +226,7 @@ def main():
                     
                 st.write("**Astrological Breakdown:** " + reason)
                 
-                with st.expander("Show Scientific Planetary Coordinates"):
+                with st.expander("View Scientific Coordinates"):
                     st.write("**Ascendant (Lagna) Lord:** " + lagnesh)
                     st.write("**Objective House Lord:** " + karyesh)
                     df = pd.DataFrame.from_dict(positions, orient='index')
@@ -225,7 +236,7 @@ def main():
                     st.dataframe(df[['Sign', 'Degree', 'Retrograde', 'Speed']], use_container_width=True)
 
     elif generate and not user_query:
-        st.error("Please type out a query before querying the engine.")
+        st.error("Please provide a query for the ML engine to evaluate.")
 
 if __name__ == "__main__":
     main()

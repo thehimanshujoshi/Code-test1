@@ -12,62 +12,64 @@ import json
 # ==========================================
 # 1. AI "THINKING" CONFIGURATION
 # ==========================================
-# Securely manage your API key using Streamlit secrets, or replace with your string key directly
-# e.g., genai.configure(api_key="YOUR_GEMINI_API_KEY")
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 except Exception:
-    # Fallback to empty string if secrets are not configured yet
     genai.configure(api_key="YOUR_GEMINI_API_KEY")
 
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def parse_intent_with_ai(user_query):
     """
-    The intelligence hub. It interprets natural language questions and 
-    preemptively determines the proper astrological rules to run.
+    Interprets natural language queries using AI and returns 
+    astrological calculation rules safely.
     """
     prompt = f"""
-    You are an expert Vedic Horary (Prashna) Astrologer. Analyze this user query: "{user_query}"
+    You are an expert Vedic Horary (Prashna) Astrologer. Analyze this query: "{user_query}"
     
-    1. Identify the 'Objective' of the query.
-    2. Determine the corresponding Astrological House (1-12) for that objective.
-        - 1: Health, Self, General Situation
-        - 2: Wealth, Family, Earnings
-        - 3: Siblings, Short Travels, Messages
-        - 4: Property, Mother, Lost Items, Weather, Rain
-        - 5: Children, Romance, Exams, Speculation
-        - 6: Disease, Pets, Debt, Enemies, Lawsuits
-        - 7: Marriage, Business Partnerships, Competitions, Opponents, Match Outcome
-        - 8: Death, Surgery, Inheritance, Hidden Things
-        - 9: Long Travels, Visa, Religion, Higher Education
-        - 10: Career, Status, Job, Promotion, Authorities
-        - 11: Gains, Friends, Fulfillment of Wishes
-        - 12: Losses, Hospitalization, Foreign Relocation
-    3. Determine the 'Mode'. 
-        - If the query is about a match, sports, election, fight, or a direct win/lose competition between two sides, the Mode is "Battle".
-        - For everything else, the Mode is "Standard".
+    Identify the objective house (1-12):
+    1: Health, Self, General
+    2: Wealth, Earnings
+    3: Travels, Messages
+    4: Property, Mother, Lost Items, Weather, Rain
+    5: Children, Romance, Exams, Speculation
+    6: Disease, Pets, Debt, Enemies, Lawsuits
+    7: Marriage, Partnerships, Competitions, Match Outcome
+    8: Surgery, Inheritance, Hidden Things
+    9: Visa, Religion, Higher Education
+    10: Career, Status, Job, Authorities
+    11: Gains, Friends, Wishes
+    12: Losses, Foreign Relocation
+    
+    Determine Mode: "Battle" for matches, sports, elections, fights. "Standard" for everything else.
     
     Return ONLY a raw JSON object in this exact format:
-    {{"target_house": 7, "mode": "Battle", "reasoning": "User is asking about a sports match or competition outcome."}}
+    {{"target_house": 7, "mode": "Battle", "reasoning": "User is asking about a sports match."}}
     """
     try:
         response = model.generate_content(prompt)
-        # Safely clean out markdown code fences if present in the raw text response
-        cleaned_text = response.text.replace('```json', '').replace('
-```', '').strip()
+        raw_text = response.text.strip()
+        
+        # Safely extract JSON without using replace() to avoid string break errors
+        if "```json" in raw_text:
+            raw_text = raw_text.split("
+```json")[1]
+        if "```" in raw_text:
+            raw_text = raw_text.split("
+```")[0]
+            
+        cleaned_text = raw_text.strip()
         data = json.loads(cleaned_text)
+        
         return int(data['target_house']), str(data['mode']), str(data['reasoning'])
+        
     except Exception as e:
-        # Graceful fallback if the API key is invalid, missing, or runs into a network error
-        return 1, "Standard", f"Using fallback engine due to initialization status: {str(e)}"
+        return 1, "Standard", f"Using fallback engine due to error: {str(e)}"
 
 # ==========================================
 # 2. CONFIGURATION & ASTRO CONSTANTS
 # ==========================================
 st.set_page_config(page_title="Sentient Prashna Engine", layout="wide", page_icon="🕉️")
-
-# Enforce Lahiri (Chitra Paksha) Ayanamsha
 swe.set_sid_mode(swe.SIDM_LAHIRI)
 
 PLANETS = {0: 'Sun', 1: 'Moon', 2: 'Mercury', 3: 'Venus', 4: 'Mars', 5: 'Jupiter', 6: 'Saturn', 10: 'Rahu', 11: 'Ketu'}
@@ -89,7 +91,7 @@ CITY_DB = {
 @st.cache_data(ttl=3600)
 def geocode_location(city_name):
     try:
-        geolocator = Nominatim(user_agent="prashna_sentient_final")
+        geolocator = Nominatim(user_agent="prashna_sentient_final_v3")
         location = geolocator.geocode(city_name)
         if location: 
             return location.latitude, location.longitude
@@ -101,10 +103,7 @@ def get_julian_day(dt, lat, lon):
     tf = TimezoneFinder()
     tz_str = tf.timezone_at(lng=lon, lat=lat) or "UTC"
     local_tz = pytz.timezone(tz_str)
-    if dt.tzinfo is None: 
-        local_dt = local_tz.localize(dt)
-    else: 
-        local_dt = dt
+    local_dt = local_tz.localize(dt) if dt.tzinfo is None else dt
     utc_dt = local_dt.astimezone(pytz.utc)
     jd = swe.julday(utc_dt.year, utc_dt.month, utc_dt.day, utc_dt.hour + utc_dt.minute/60.0 + utc_dt.second/3600.0)
     return jd, tz_str
@@ -141,18 +140,12 @@ def check_aspect(p1, p2, positions):
 def evaluate_battle(positions, lagnesh, karyesh):
     p1, p2 = positions[lagnesh], positions[karyesh]
     score1, score2 = 0, 0
-    if abs(p1['Speed']) > abs(p2['Speed']): 
-        score1 += 1
-    else: 
-        score2 += 1
-    if p1['Retrograde']: 
-        score1 -= 1
-    if p2['Retrograde']: 
-        score2 -= 1
-    if lagnesh in ['Jupiter', 'Venus', 'Sun']: 
-        score1 += 1
-    if karyesh in ['Jupiter', 'Venus', 'Sun']: 
-        score2 += 1
+    if abs(p1['Speed']) > abs(p2['Speed']): score1 += 1
+    else: score2 += 1
+    if p1['Retrograde']: score1 -= 1
+    if p2['Retrograde']: score2 -= 1
+    if lagnesh in ['Jupiter', 'Venus', 'Sun']: score1 += 1
+    if karyesh in ['Jupiter', 'Venus', 'Sun']: score2 += 1
 
     if score1 > score2: 
         return "TEAM 1 / FIRST OPTION WINS", f"The 1st House Lord ({lagnesh}) holds more mathematical strength and speed compared to the opponent's lord ({karyesh})."
@@ -183,7 +176,7 @@ def main():
     
     with col1:
         st.header("1. Your Question")
-        user_query = st.text_area("Ask anything naturally:", placeholder="Will I secure my dream career path? Will it rain over the venue tonight? Who will sweep the match?")
+        user_query = st.text_area("Ask anything naturally:", placeholder="Will I secure my dream career path? Will it rain tonight? Who will win?")
         
         st.markdown("---")
         st.subheader("2. Location & Time")
@@ -207,10 +200,8 @@ def main():
     if generate and user_query:
         with st.spinner("Analyzing question logic and running ephemeris calculations..."):
             
-            # 1. AI PREEMPTIVELY RUNS INTENT PARSING
             target_house, query_mode, ai_reasoning = parse_intent_with_ai(user_query)
             
-            # 2. RUN ASTRONOMICAL COMPUTATIONS
             dt_combined = datetime.combine(q_date, q_time)
             dt_aware = pytz.timezone('Asia/Kolkata').localize(dt_combined)
             jd, tz_str = get_julian_day(dt_aware, lat, lon)
@@ -221,7 +212,6 @@ def main():
             karyesha_sign_idx = (asc_sign_idx + target_house - 1) % 12
             karyesh = RASHI_LORDS[karyesha_sign_idx]
             
-            # 3. EVALUATE RULES BASED ON CALCULATED MODE
             if query_mode == "Battle":
                 verdict, reason = evaluate_battle(positions, lagnesh, karyesh)
             else:
@@ -230,10 +220,8 @@ def main():
             with col2:
                 st.header("The Answer")
                 
-                # Context Block
                 st.info(f"🧠 **AI Interpretation Insight:** {ai_reasoning} \n\n*Calculated Axis: House {target_house} ({query_mode} Mode)*")
                 
-                # Visual Verdict Formatting
                 if "YES" in verdict or "WINS" in verdict or "FAVORABLE" in verdict: 
                     st.success(f"### {verdict}")
                 elif "NO" in verdict: 

@@ -1,23 +1,24 @@
 import streamlit as st
 import swisseph as swe
 import pandas as pd
+import math
 from datetime import datetime
 import pytz
 from geopy.geocoders import Nominatim
+from timezonefinder import TimezoneFinder
 
 # ==========================================
-# 1. CONFIGURATION & SWISS EPHEMERIS SETUP
+# 1. CONFIGURATION & CONSTANTS
 # ==========================================
-st.set_page_config(page_title="Advanced Prashna Kundali", layout="wide")
+st.set_page_config(page_title="Pro Prashna Kundali", layout="wide", page_icon="🕉️")
 
-# Set Ayanamsha to Lahiri (Chitra Paksha) for Vedic Calculations
+# Swiss Ephemeris configuration (Lahiri Ayanamsha)
 swe.set_sid_mode(swe.SIDM_LAHIRI)
 
-# Planetary Constants Mapping
 PLANETS = {
     0: 'Sun', 1: 'Moon', 2: 'Mercury', 3: 'Venus', 
     4: 'Mars', 5: 'Jupiter', 6: 'Saturn', 
-    10: 'Rahu', 11: 'Ketu' # Note: True Node calculations are used
+    10: 'Rahu', 11: 'Ketu' 
 }
 
 ZODIAC_SIGNS = [
@@ -25,223 +26,265 @@ ZODIAC_SIGNS = [
     "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"
 ]
 
-# Rashi Lords Mapping (0=Aries, 1=Taurus...)
 RASHI_LORDS = {
     0: 'Mars', 1: 'Venus', 2: 'Mercury', 3: 'Moon', 4: 'Sun', 5: 'Mercury',
     6: 'Venus', 7: 'Mars', 8: 'Jupiter', 9: 'Saturn', 10: 'Saturn', 11: 'Jupiter'
 }
 
+# Deeptamsha (Orbs of Influence) in degrees per Tajika Prashna
+PLANET_ORBS = {
+    'Sun': 15.0, 'Moon': 12.0, 'Mars': 8.0, 'Mercury': 7.0,
+    'Jupiter': 9.0, 'Venus': 7.0, 'Saturn': 9.0, 'Rahu': 0.0, 'Ketu': 0.0
+}
+
+# Pre-loaded Major Cities for fast loading
+CITY_DB = {
+    "Jaipur, Rajasthan (Default)": {"lat": 26.9124, "lon": 75.7873},
+    "New Delhi, Delhi": {"lat": 28.6139, "lon": 77.2090},
+    "Mumbai, Maharashtra": {"lat": 19.0760, "lon": 72.8777},
+    "Bangalore, Karnataka": {"lat": 12.9716, "lon": 77.5946},
+    "Chennai, Tamil Nadu": {"lat": 13.0827, "lon": 80.2707},
+    "Kolkata, West Bengal": {"lat": 22.5726, "lon": 88.3639},
+    "Custom Search...": None
+}
+
 # ==========================================
 # 2. CORE ASTRONOMICAL CALCULATIONS
 # ==========================================
-def get_julian_day(dt, tz_str="UTC"):
-    """Converts a local datetime to Julian Day for Swiss Ephemeris."""
+@st.cache_data(ttl=3600)
+def geocode_location(city_name):
+    """Fetches exact decimal coordinates for a custom city search."""
+    geolocator = Nominatim(user_agent="prashna_pro_engine")
+    location = geolocator.geocode(city_name)
+    if location:
+        return location.latitude, location.longitude
+    return None, None
+
+def get_julian_day(dt, lat, lon):
+    """Resolves precise timezone and calculates Julian Day."""
+    tf = TimezoneFinder()
+    tz_str = tf.timezone_at(lng=lon, lat=lat) or "UTC"
     local_tz = pytz.timezone(tz_str)
     local_dt = local_tz.localize(dt)
     utc_dt = local_dt.astimezone(pytz.utc)
     
-    # Calculate Julian Day
     jd = swe.julday(utc_dt.year, utc_dt.month, utc_dt.day, 
                     utc_dt.hour + utc_dt.minute/60.0 + utc_dt.second/3600.0)
-    return jd
+    return jd, tz_str
 
 def calculate_chart(jd, lat, lon):
-    """Calculates planetary positions, Lagna (Ascendant), and Bhavas (Houses)."""
+    """Calculates pinpoint sidereal planetary longitudes, speeds, and latitudes."""
     positions = {}
+    flag = swe.FLG_SWIEPH | swe.FLG_SIDEREAL 
     
-    # 1. Calculate Sidereal Planetary Positions
     for p_id, p_name in PLANETS.items():
-        # Using SEFLG_SIDEREAL for Vedic astrology
-        flag = swe.FLG_SWIEPH | swe.FLG_SIDEREAL 
-        if p_id == 10: # Rahu (True Node)
+        if p_id == 10: # True Rahu
             calc, _ = swe.calc_ut(jd, swe.TRUE_NODE, flag)
-        elif p_id == 11: # Ketu (Opposite to Rahu)
+        elif p_id == 11: # True Ketu
             calc_rahu, _ = swe.calc_ut(jd, swe.TRUE_NODE, flag)
             calc = ((calc_rahu[0] + 180.0) % 360.0, 0, 0, 0, 0, 0)
         else:
             calc, _ = swe.calc_ut(jd, p_id, flag)
             
         lon_deg = calc[0]
+        lat_deg = calc[1] # Celestial latitude for Graha Yuddha
+        speed = calc[3]
         sign_idx = int(lon_deg // 30)
         
         positions[p_name] = {
             'Longitude': lon_deg,
+            'Latitude': lat_deg,
             'Sign': ZODIAC_SIGNS[sign_idx],
             'Sign_Idx': sign_idx,
             'Degree': lon_deg % 30,
-            'Retrograde': 'Yes' if calc[3] < 0 else 'No',
-            'Speed': calc[3]
+            'Speed': speed,
+            'Retrograde': 'Yes' if speed < 0 else 'No'
         }
         
-    # 2. Calculate Ascendant (Lagna) & House Cusps (Placidus or Whole Sign)
-    # 0 = Placidus, but Vedic often uses Whole Sign (W) or Sri Pati
     cusps, ascmc = swe.houses_ex(jd, lat, lon, b'W', flag)
     asc_deg = ascmc[0]
-    asc_sign_idx = int(asc_deg // 30)
-    
-    return positions, asc_deg, asc_sign_idx
+    return positions, asc_deg
+
+def calculate_tithi(sun_lon, moon_lon):
+    """Calculates precise Lunar Day (Tithi)."""
+    diff = (moon_lon - sun_lon) % 360
+    tithi_num = math.floor(diff / 12) + 1
+    paksha = "Shukla" if tithi_num <= 15 else "Krishna"
+    display_num = tithi_num if tithi_num <= 15 else tithi_num - 15
+    return f"{paksha} Paksha, Tithi {display_num} ({'Auspicious' if tithi_num not in [4,9,14] else 'Rikta/Empty - Obstacles likely'})"
+
+def calc_saham(day_chart, point_a, point_b, asc_deg):
+    """Calculates an Arabic Part / Saham mathematically."""
+    saham_deg = (point_a - point_b + asc_deg) % 360
+    # Tajika rule: If Asc is not between A and B, add 30 degrees
+    # Simplified check for betweenness
+    if not (min(point_b, point_a) <= asc_deg <= max(point_b, point_a)):
+        saham_deg = (saham_deg + 30) % 360
+    return saham_deg
 
 # ==========================================
-# 3. PRASHNA (HORARY) RULES ENGINE
+# 3. ADVANCED PRASHNA RULES ENGINE
 # ==========================================
-def analyze_prashna(positions, asc_sign_idx, query_house):
-    """
-    Applies the detailed algorithm for Horary astrology.
-    Analyzes Lagnesh (Querent) and Karyesh (Object of query).
-    """
-    # 1. Identify Significators
-    lagnesh_planet = RASHI_LORDS[asc_sign_idx]
+def evaluate_tajika_yogas(positions, lagnesh, karyesh):
+    """Evaluates aspects based on exact average Deeptamsha (Orbs)."""
+    if lagnesh == karyesh:
+        return "Favorable: Lagnesh and Karyesh are the same planet.", "Self-Signification"
+        
+    p1, p2 = positions[lagnesh], positions[karyesh]
+    orb1, orb2 = PLANET_ORBS[lagnesh], PLANET_ORBS[karyesh]
+    avg_orb = (orb1 + orb2) / 2.0
     
-    karyesha_sign_idx = (asc_sign_idx + query_house - 1) % 12
-    karyesha_planet = RASHI_LORDS[karyesha_sign_idx]
-    
-    lagnesh_data = positions.get(lagnesh_planet)
-    karyesha_data = positions.get(karyesha_planet)
-    moon_data = positions.get('Moon')
-    
-    analysis = {
-        'Lagnesh (Asker)': lagnesh_planet,
-        'Karyesh (Query)': karyesha_planet,
-        'Moon (Mind)': f"{moon_data['Sign']} ({moon_data['Degree']:.2f}°)",
-        'Tajika_Yoga': 'None',
-        'Verdict': 'Neutral / Needs Deeper Analysis'
-    }
-    
-    # 2. Evaluate Tajika Yogas (The Core of Prashna)
-    # Check if Lagnesh and Karyesh are the same (Query belongs to self, e.g., health)
-    if lagnesh_planet == karyesha_planet:
-        analysis['Verdict'] = "Favorable: Lagnesh is also the Karyesh."
-        return analysis
-
-    # Calculate phase difference for Ithasala (Applying Aspect / Success) 
-    # & Easarpha (Separating Aspect / Failure)
-    speed_L = lagnesh_data['Speed']
-    speed_K = karyesha_data['Speed']
-    deg_L = lagnesh_data['Degree']
-    deg_K = karyesha_data['Degree']
-    
-    # Simplified Aspect Check (Trine, Square, Sextile, Opposition, Conjunction)
-    # *Note: A full app requires exact orb limits (Deeptamsha) per planet.
-    angle = abs(lagnesh_data['Longitude'] - karyesha_data['Longitude'])
+    # Calculate angular distance
+    angle = abs(p1['Longitude'] - p2['Longitude'])
+    if angle > 180:
+        angle = 360 - angle
+        
     aspects = {0: 'Conjunction', 60: 'Sextile', 90: 'Square', 120: 'Trine', 180: 'Opposition'}
     
-    has_aspect = False
     for asp_deg, asp_name in aspects.items():
-        if abs(angle - asp_deg) < 5 or abs(360 - angle - asp_deg) < 5: # 5 degree orb
-            has_aspect = True
+        if abs(angle - asp_deg) <= avg_orb:
+            # Aspect exists! Determine Ithasala (Applying) or Easarpha (Separating)
+            fast_p, slow_p = (p1, p2) if abs(p1['Speed']) > abs(p2['Speed']) else (p2, p1)
             
-            # Fast planet must be behind slow planet for Ithasala (Success)
-            fast_planet, slow_planet = (lagnesh_data, karyesha_data) if abs(speed_L) > abs(speed_K) else (karyesha_data, lagnesh_data)
-            
-            if fast_planet['Degree'] < slow_planet['Degree']:
-                analysis['Tajika_Yoga'] = f'Ithasala ({asp_name})'
-                analysis['Verdict'] = "Highly Favorable: Success is indicated."
+            # Using precise mathematical degree for the current sign
+            if fast_p['Degree'] < slow_p['Degree']:
+                return f"Success Indicated. Faster planet is applying to slower planet within orb ({avg_orb:.1f}°).", f"Ithasala ({asp_name})"
             else:
-                analysis['Tajika_Yoga'] = f'Easarpha ({asp_name})'
-                analysis['Verdict'] = "Unfavorable: The opportunity has passed or is delayed."
-            break
-            
-    if not has_aspect:
-        # Check Nakta or Yamaya Yoga (Moon or slower planet transferring light)
-        # *Placeholder for advanced logic*
-        analysis['Verdict'] = "No direct connection between Asker and Objective. Success unlikely without intervention."
+                return f"Opportunity Passed/Delayed. Faster planet is separating from slower planet.", f"Easarpha ({asp_name})"
+                
+    return "No direct aspect within exact orb limits. Success depends on intermediary (Nakta Yoga) or remedies.", "None"
 
-    return analysis
+def analyze_combustion_and_war(positions, lagnesh, karyesh):
+    """Checks for Moudhya (Combustion) and Graha Yuddha (Planetary War)."""
+    issues = []
+    sun_lon = positions['Sun']['Longitude']
+    
+    # Combustion Check (Simplified < 8 degrees from Sun)
+    for p in [lagnesh, karyesh]:
+        if p != 'Sun' and p not in ['Rahu', 'Ketu']:
+            dist = abs(positions[p]['Longitude'] - sun_lon)
+            if dist > 180: dist = 360 - dist
+            if dist <= 8.0:
+                issues.append(f"⚠️ {p} is Combust (Moudhya). Its power to deliver is severely restricted.")
+                
+    # Graha Yuddha Check (Within 1 degree)
+    if lagnesh not in ['Sun', 'Moon', 'Rahu', 'Ketu'] and karyesh not in ['Sun', 'Moon', 'Rahu', 'Ketu']:
+        dist = abs(positions[lagnesh]['Longitude'] - positions[karyesh]['Longitude'])
+        if dist <= 1.0:
+            winner = lagnesh if abs(positions[lagnesh]['Latitude']) > abs(positions[karyesh]['Latitude']) else karyesh
+            issues.append(f"⚔️ Planetary War (Graha Yuddha) between significators! {winner} wins mathematically based on celestial latitude.")
+            
+    return issues
 
 # ==========================================
 # 4. STREAMLIT USER INTERFACE
 # ==========================================
 def main():
-    st.title("🕉️ Advanced Prashna Kundali (Horary) Engine")
-    st.markdown("""
-    This application generates a Horary chart for the exact moment a query is asked and applies **Tajika Yogas** to determine the outcome.
-    """)
+    st.title("🕉️ Professional Horary (Prashna) Engine")
+    st.markdown("Precision Tajika calculations using Swiss Ephemeris, True Nodes, and exact planetary Orbs.")
     
-    col1, col2 = st.columns([1, 2])
+    col1, col2 = st.columns([1, 2.5])
     
     with col1:
-        st.header("Query Details")
-        q_date = st.date_input("Date of Question", datetime.now())
-        q_time = st.time_input("Time of Question", datetime.now().time())
-        city = st.text_input("City", "New Delhi, India")
+        st.header("1. Chart Data")
         
-        # Mapping common queries to Astrological Houses
-        house_mapping = {
-            "1st House: Health, Self, General wellbeing": 1,
-            "2nd House: Wealth, Family, Speech": 2,
-            "3rd House: Siblings, Short trips, Courage": 3,
-            "4th House: Property, Mother, Vehicles": 4,
-            "5th House: Children, Speculation, Romance": 5,
-            "6th House: Disease, Enemies, Debt, Litigation": 6,
-            "7th House: Marriage, Partnerships, Travel": 7,
-            "8th House: Longevity, Hidden matters, Inheritance": 8,
-            "9th House: Higher education, Religion, Long travel": 9,
-            "10th House: Career, Profession, Status": 10,
-            "11th House: Gains, Friends, Fulfillment of desires": 11,
-            "12th House: Losses, Foreign lands, Imprisonment": 12
-        }
-        query_type = st.selectbox("Category of Question", list(house_mapping.keys()))
-        target_house = house_mapping[query_type]
+        # LOCATION MODULE
+        st.subheader("Location")
+        loc_choice = st.selectbox("Select City", list(CITY_DB.keys()))
         
-        generate = st.button("Cast Prashna Chart")
+        lat, lon = CITY_DB["Jaipur, Rajasthan (Default)"]["lat"], CITY_DB["Jaipur, Rajasthan (Default)"]["lon"]
+        
+        if loc_choice == "Custom Search...":
+            custom_city = st.text_input("Enter City, State, Country")
+            if custom_city:
+                clat, clon = geocode_location(custom_city)
+                if clat and clon:
+                    lat, lon = clat, clon
+                    st.success(f"Located: {lat:.4f}, {lon:.4f}")
+                else:
+                    st.error("Location not found. Please try again.")
+        elif loc_choice != "Jaipur, Rajasthan (Default)":
+            lat, lon = CITY_DB[loc_choice]["lat"], CITY_DB[loc_choice]["lon"]
+            
+        # TIME MODULE
+        st.subheader("Time of Query")
+        q_date = st.date_input("Date", datetime.now())
+        q_time = st.time_input("Time", datetime.now().time())
+        
+        # QUERY MODULE
+        st.subheader("Objective")
+        target_house = st.number_input("Target House (1-12) based on Query", min_value=1, max_value=12, value=1)
+        
+        generate = st.button("Cast Prashna Chart", type="primary", use_container_width=True)
 
     if generate:
-        with st.spinner("Calculating Ephemeris and Analyzing Yogas..."):
-            try:
-                # 1. Geocoding
-                geolocator = Nominatim(user_agent="prashna_app")
-                location = geolocator.geocode(city)
-                if not location:
-                    st.error("Location not found. Please enter a valid city.")
-                    return
-                    
-                # 2. Time & JD Conversion
-                dt_combined = datetime.combine(q_date, q_time)
-                # Note: In a production app, use timezonefinder to get exact tz from lat/lon
-                jd = get_julian_day(dt_combined, tz_str="Asia/Kolkata") 
+        with st.spinner("Executing Astronomical Calculations..."):
+            dt_combined = datetime.combine(q_date, q_time)
+            jd, tz_str = get_julian_day(dt_combined, lat, lon)
+            positions, asc_deg = calculate_chart(jd, lat, lon)
+            
+            # Fundamentals
+            asc_sign_idx = int(asc_deg // 30)
+            lagnesh = RASHI_LORDS[asc_sign_idx]
+            karyesha_sign_idx = (asc_sign_idx + target_house - 1) % 12
+            karyesh = RASHI_LORDS[karyesha_sign_idx]
+            
+            # Analytics
+            tithi_str = calculate_tithi(positions['Sun']['Longitude'], positions['Moon']['Longitude'])
+            verdict, yoga_name = evaluate_tajika_yogas(positions, lagnesh, karyesh)
+            dignity_issues = analyze_combustion_and_war(positions, lagnesh, karyesh)
+            
+            # --- DISPLAY DASHBOARD ---
+            with col2:
+                st.header("Prashna Diagnostic Report")
                 
-                # 3. Calculation
-                positions, asc_deg, asc_sign_idx = calculate_chart(jd, location.latitude, location.longitude)
+                # Top Row Metrics
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Ascendant (Lagna)", f"{ZODIAC_SIGNS[asc_sign_idx]} ({asc_deg%30:.2f}°)")
+                m2.metric("Lagnesh (Asker)", lagnesh)
+                m3.metric("Karyesh (Query)", karyesh)
+                m4.metric("Timezone Detected", tz_str)
                 
-                # 4. Analysis
-                analysis = analyze_prashna(positions, asc_sign_idx, target_house)
+                st.info(f"**Panchang Matrix:** {tithi_str}")
                 
-                # --- DISPLAY RESULTS ---
-                with col2:
-                    st.header("Prashna Analysis Report")
+                # Analysis Result
+                st.subheader("Tajika Yoga Verdict")
+                if "Success" in verdict or "Favorable" in verdict:
+                    st.success(f"**{yoga_name}**: {verdict}")
+                elif "Passed" in verdict:
+                    st.error(f"**{yoga_name}**: {verdict}")
+                else:
+                    st.warning(f"**{yoga_name}**: {verdict}")
                     
-                    st.subheader("Fundamental Chart Details")
-                    col_a, col_b, col_c = st.columns(3)
-                    col_a.metric("Ascendant (Lagna)", ZODIAC_SIGNS[asc_sign_idx])
-                    col_b.metric("Lagna Lord (Lagnesh)", analysis['Lagnesh (Asker)'])
-                    col_c.metric("Query Lord (Karyesh)", analysis['Karyesh (Query)'])
-                    
-                    st.markdown("---")
-                    
-                    st.subheader("Planetary Positions")
-                    df = pd.DataFrame.from_dict(positions, orient='index')
-                    df['Longitude'] = df['Longitude'].apply(lambda x: f"{x:.2f}°")
-                    df['Degree'] = df['Degree'].apply(lambda x: f"{x:.2f}°")
-                    df['Speed'] = df['Speed'].apply(lambda x: f"{x:.4f}")
-                    st.dataframe(df, use_container_width=True)
-                    
-                    st.markdown("---")
-                    
-                    st.subheader("Astrological Verdict")
-                    if "Favorable" in analysis['Verdict']:
-                        st.success(analysis['Verdict'])
-                    elif "Unfavorable" in analysis['Verdict'] or "unlikely" in analysis['Verdict']:
-                        st.error(analysis['Verdict'])
-                    else:
-                        st.warning(analysis['Verdict'])
+                if dignity_issues:
+                    for issue in dignity_issues:
+                        st.error(issue)
                         
-                    with st.expander("Detailed Algorithmic Reasoning"):
-                        st.write(f"**Tajika Yoga Identified:** {analysis['Tajika_Yoga']}")
-                        st.write(f"**Moon's Position:** {analysis['Moon (Mind)']} - The Moon represents the querent's mind and the immediate flow of events.")
-                        st.write("*Note: In Prashna, a retrograde Karyesh often indicates that the subject matter will return or repeat, but with delays.*")
-
-            except Exception as e:
-                st.error(f"An error occurred during calculation: {e}")
+                # Deep Data Table
+                st.subheader("Exact Sidereal Coordinates")
+                df = pd.DataFrame.from_dict(positions, orient='index')
+                df['Longitude'] = df['Longitude'].apply(lambda x: f"{x:.4f}°")
+                df['Latitude'] = df['Latitude'].apply(lambda x: f"{x:.4f}°")
+                df['Degree'] = df['Degree'].apply(lambda x: f"{x:.2f}°")
+                df['Speed'] = df['Speed'].apply(lambda x: f"{x:.4f}")
+                st.dataframe(df, use_container_width=True)
+                
+                # Mathematical proofs expander
+                with st.expander("Show Mathematical Proofs & Sahams"):
+                    st.write("**Deeptamsha (Orb) Validation:**")
+                    if lagnesh != karyesh:
+                        avg_orb = (PLANET_ORBS[lagnesh] + PLANET_ORBS[karyesh]) / 2.0
+                        dist = abs(positions[lagnesh]['Longitude'] - positions[karyesh]['Longitude'])
+                        dist = min(dist, 360-dist)
+                        st.code(f"Orb Limit: {avg_orb:.2f}° | Actual Distance: {dist:.2f}°")
+                    
+                    st.write("**Punya Saham (Point of Fortune):**")
+                    day_chart = positions['Sun']['Longitude'] < 180 # simplified check
+                    p_a = positions['Moon']['Longitude'] if day_chart else positions['Sun']['Longitude']
+                    p_b = positions['Sun']['Longitude'] if day_chart else positions['Moon']['Longitude']
+                    saham = calc_saham(day_chart, p_a, p_b, asc_deg)
+                    s_sign = ZODIAC_SIGNS[int(saham // 30)]
+                    st.code(f"Longitude: {saham:.4f}° | Sign: {s_sign} ({saham%30:.2f}°)")
 
 if __name__ == "__main__":
     main()

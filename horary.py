@@ -20,43 +20,26 @@ except Exception:
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def parse_intent_with_ai(user_query):
-    """
-    Interprets natural language queries using AI and returns 
-    astrological calculation rules safely.
-    """
-    prompt = f"""
-    You are an expert Vedic Horary (Prashna) Astrologer. Analyze this query: "{user_query}"
+    # Using bulletproof string concatenation to prevent copy-paste syntax errors
+    prompt = (
+        "You are an expert Vedic Horary (Prashna) Astrologer. Analyze this query: '" + user_query + "'\n"
+        "Identify the objective house (1-12): 1: Health/Self, 2: Wealth, 3: Travels/Messages, "
+        "4: Property/Weather/Rain, 5: Romance/Exams, 6: Disease/Pets/Debt/Enemies, "
+        "7: Marriage/Partnerships/Competitions/Matches, 8: Surgery/Inheritance/Hidden, "
+        "9: Visa/Religion/Higher Ed, 10: Career/Job, 11: Gains/Friends, 12: Losses/Foreign.\n"
+        "Determine Mode: 'Battle' for matches, sports, elections, fights. 'Standard' for everything else.\n"
+        "Return ONLY a raw JSON object in this exact format: "
+        "{\"target_house\": 7, \"mode\": \"Battle\", \"reasoning\": \"sports match\"}"
+    )
     
-    Identify the objective house (1-12):
-    1: Health, Self, General
-    2: Wealth, Earnings
-    3: Travels, Messages
-    4: Property, Mother, Lost Items, Weather, Rain
-    5: Children, Romance, Exams, Speculation
-    6: Disease, Pets, Debt, Enemies, Lawsuits
-    7: Marriage, Partnerships, Competitions, Match Outcome
-    8: Surgery, Inheritance, Hidden Things
-    9: Visa, Religion, Higher Education
-    10: Career, Status, Job, Authorities
-    11: Gains, Friends, Wishes
-    12: Losses, Foreign Relocation
-    
-    Determine Mode: "Battle" for matches, sports, elections, fights. "Standard" for everything else.
-    
-    Return ONLY a raw JSON object in this exact format:
-    {{"target_house": 7, "mode": "Battle", "reasoning": "User is asking about a sports match."}}
-    """
     try:
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
         
-        # Safely extract JSON without using replace() to avoid string break errors
         if "```json" in raw_text:
-            raw_text = raw_text.split("
-```json")[1]
+            raw_text = raw_text.split("```json")[1]
         if "```" in raw_text:
-            raw_text = raw_text.split("
-```")[0]
+            raw_text = raw_text.split("```")[0]
             
         cleaned_text = raw_text.strip()
         data = json.loads(cleaned_text)
@@ -64,7 +47,7 @@ def parse_intent_with_ai(user_query):
         return int(data['target_house']), str(data['mode']), str(data['reasoning'])
         
     except Exception as e:
-        return 1, "Standard", f"Using fallback engine due to error: {str(e)}"
+        return 1, "Standard", "Using fallback engine due to error: " + str(e)
 
 # ==========================================
 # 2. CONFIGURATION & ASTRO CONSTANTS
@@ -91,7 +74,7 @@ CITY_DB = {
 @st.cache_data(ttl=3600)
 def geocode_location(city_name):
     try:
-        geolocator = Nominatim(user_agent="prashna_sentient_final_v3")
+        geolocator = Nominatim(user_agent="prashna_sentient_final_v4")
         location = geolocator.geocode(city_name)
         if location: 
             return location.latitude, location.longitude
@@ -148,10 +131,10 @@ def evaluate_battle(positions, lagnesh, karyesh):
     if karyesh in ['Jupiter', 'Venus', 'Sun']: score2 += 1
 
     if score1 > score2: 
-        return "TEAM 1 / FIRST OPTION WINS", f"The 1st House Lord ({lagnesh}) holds more mathematical strength and speed compared to the opponent's lord ({karyesh})."
+        return "TEAM 1 / FIRST OPTION WINS", "The 1st House Lord holds more mathematical strength and speed compared to the opponent's lord."
     elif score2 > score1: 
-        return "TEAM 2 / SECOND OPTION WINS", f"The 7th House Lord ({karyesh}) carries stronger astrological velocity and status right now than the 1st House Lord ({lagnesh})."
-    return "TIE / EXTREMELY CLOSE MATCH", f"Both structural planet significators ({lagnesh} and {karyesh}) share equal strength. Expect a down-to-the-wire finish."
+        return "TEAM 2 / SECOND OPTION WINS", "The 7th House Lord carries stronger astrological velocity and status right now than the 1st House Lord."
+    return "TIE / EXTREMELY CLOSE MATCH", "Both structural planet significators share equal strength. Expect a down-to-the-wire finish."
 
 def evaluate_standard(positions, lagnesh, karyesh):
     if lagnesh == karyesh: 
@@ -161,8 +144,8 @@ def evaluate_standard(positions, lagnesh, karyesh):
         p1, p2 = positions[lagnesh], positions[karyesh]
         fast_p, slow_p = (p1, p2) if abs(p1['Speed']) > abs(p2['Speed']) else (p2, p1)
         if fast_p['Degree'] < slow_p['Degree']: 
-            return "YES / SUCCESS", f"Success is cleanly indicated through an applying cosmic aspect ({asp_name}). Manifestation is in progress."
-        return "NO / DELAYED", f"The aspect configuration is separating ({asp_name}), meaning the clear window of opportunity has stalled or shifted."
+            return "YES / SUCCESS", "Success is cleanly indicated through an applying cosmic aspect. Manifestation is in progress."
+        return "NO / DELAYED", "The aspect configuration is separating, meaning the clear window of opportunity has stalled or shifted."
     return "NO / UNFAVORABLE", "There is no functional or aspectual connection joining the querent to the objective at this time."
 
 # ==========================================
@@ -220,20 +203,20 @@ def main():
             with col2:
                 st.header("The Answer")
                 
-                st.info(f"🧠 **AI Interpretation Insight:** {ai_reasoning} \n\n*Calculated Axis: House {target_house} ({query_mode} Mode)*")
+                st.info("🧠 **AI Interpretation Insight:** " + ai_reasoning + "\n\n*Calculated Axis: House " + str(target_house) + " (" + query_mode + " Mode)*")
                 
                 if "YES" in verdict or "WINS" in verdict or "FAVORABLE" in verdict: 
-                    st.success(f"### {verdict}")
+                    st.success("### " + verdict)
                 elif "NO" in verdict: 
-                    st.error(f"### {verdict}")
+                    st.error("### " + verdict)
                 else: 
-                    st.warning(f"### {verdict}")
+                    st.warning("### " + verdict)
                     
-                st.write(f"**Astrological Breakdown:** {reason}")
+                st.write("**Astrological Breakdown:** " + reason)
                 
                 with st.expander("Show Scientific Planetary Coordinates"):
-                    st.write(f"**Ascendant (Lagna) Lord:** {lagnesh}")
-                    st.write(f"**Objective House Lord:** {karyesh}")
+                    st.write("**Ascendant (Lagna) Lord:** " + lagnesh)
+                    st.write("**Objective House Lord:** " + karyesh)
                     df = pd.DataFrame.from_dict(positions, orient='index')
                     df['Longitude'] = df['Longitude'].apply(lambda x: f"{x:.2f}°")
                     df['Speed'] = df['Speed'].apply(lambda x: f"{x:.3f}")

@@ -8,3 +8,5 @@ numpy
 ephem
 plotly
 scikit-learn
+geopy
+timezonefinder

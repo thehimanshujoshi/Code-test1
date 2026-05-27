@@ -47,9 +47,9 @@ def parse_intent_with_ai(user_query):
     try:
         response = model.generate_content(prompt)
         # Clean up the response to ensure it's pure JSON
-        cleaned_text = response.text.replace('```json', '').replace('
-```', '').strip()
-        data = json.loads(cleaned_text)
+        cleaned_text = response.text.replace('```json','').replace('```', '').strip()
+        data =
+json.loads(cleaned_text)
         return data['target_house'], data['mode'], data['reasoning']
     except Exception as e:
         # Fallback if API fails

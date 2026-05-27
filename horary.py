@@ -61,7 +61,15 @@ vectorizer = TfidfVectorizer(stop_words='english')
 doc_vectors = vectorizer.fit_transform(documents)
 
 def extract_intent_ml(query):
-    query_vec = vectorizer.transform([query.lower()])
+    query_lower = query.lower()
+    
+    # 1. HARD OVERRIDE: Catch "Lost Item" phrases before they get deleted by ML stop-words
+    lost_phrases = ["where is", "where are", "where's", "lost my", "cant find", "missing", "stole"]
+    if any(phrase in query_lower for phrase in lost_phrases):
+        return 4, "Standard", "Hard Override: Detected exact lost item phrasing."
+
+    # 2. RUN STANDARD ML MATH FOR EVERYTHING ELSE
+    query_vec = vectorizer.transform([query_lower])
     similarities = cosine_similarity(query_vec, doc_vectors)[0]
     best_match_idx = similarities.argmax()
     best_score = similarities[best_match_idx]
@@ -72,7 +80,9 @@ def extract_intent_ml(query):
         mode = "Battle" if matched_key == "Battle" else "Standard"
         reasoning = f"Semantic Match Score: {best_score:.2f} (Aligned with Vector Context: {matched_key})"
         return target_house, mode, reasoning
+        
     return 1, "Standard", "Low semantic match. Defaulting to 1st House (General/Self)."
+
 
 # ==========================================
 # 3. CORE ASTRONOMICAL & VARGA CALCULATIONS

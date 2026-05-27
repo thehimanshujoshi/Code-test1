@@ -10,3 +10,5 @@ plotly
 scikit-learn
 geopy
 timezonefinder
+google-generativeai
+

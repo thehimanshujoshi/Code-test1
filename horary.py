@@ -11,9 +11,8 @@ from timezonefinder import TimezoneFinder
 # ==========================================
 # 1. CONFIGURATION & CONSTANTS
 # ==========================================
-st.set_page_config(page_title="Pro Prashna Kundali", layout="wide", page_icon="🕉️")
+st.set_page_config(page_title="Ultimate Prashna Engine", layout="wide", page_icon="🕉️")
 
-# Swiss Ephemeris configuration (Lahiri Ayanamsha)
 swe.set_sid_mode(swe.SIDM_LAHIRI)
 
 PLANETS = {
@@ -37,6 +36,14 @@ PLANET_ORBS = {
     'Jupiter': 9.0, 'Venus': 7.0, 'Saturn': 9.0, 'Rahu': 0.0, 'Ketu': 0.0
 }
 
+# Added Modalities for Timing Predictions
+MODALITIES = {
+    "Aries": "Movable", "Taurus": "Fixed", "Gemini": "Dual",
+    "Cancer": "Movable", "Leo": "Fixed", "Virgo": "Dual",
+    "Libra": "Movable", "Scorpio": "Fixed", "Sagittarius": "Dual",
+    "Capricorn": "Movable", "Aquarius": "Fixed", "Pisces": "Dual"
+}
+
 CITY_DB = {
     "Jaipur, Rajasthan (Default)": {"lat": 26.9124, "lon": 75.7873},
     "New Delhi, Delhi": {"lat": 28.6139, "lon": 77.2090},
@@ -48,36 +55,32 @@ CITY_DB = {
 }
 
 # ==========================================
-# 2. NATURAL LANGUAGE PROCESSING (NLP) ENGINE
+# 2. ADVANCED NLP KEYWORD ENGINE
 # ==========================================
 def extract_target_house(query):
-    """Scans user's natural language query and maps it to the correct astrological house."""
     query = query.lower()
     
-    # Extensive dictionary mapping real-world words to astrological houses
     house_keywords = {
-        1: ['myself', 'health', 'life', 'appearance', 'body', 'me', 'i ', 'my '],
-        2: ['money', 'wealth', 'salary', 'bank', 'finance', 'speech', 'family', 'saving', 'jewelry'],
-        3: ['brother', 'sister', 'sibling', 'trip', 'travel', 'neighbor', 'email', 'message', 'courage', 'interview'],
-        4: ['mother', 'house', 'home', 'real estate', 'property', 'car', 'vehicle', 'land', 'buying a home'],
-        5: ['child', 'baby', 'son', 'daughter', 'exam', 'lottery', 'romance', 'love', 'dating', 'stock', 'crypto', 'pregnancy'],
-        6: ['disease', 'sick', 'illness', 'pet', 'dog', 'cat', 'enemy', 'court', 'debt', 'loan', 'surgery', 'tenant', 'competition'],
-        7: ['marriage', 'husband', 'wife', 'partner', 'business partner', 'divorce', 'relationship', 'spouse', 'contract'],
-        8: ['death', 'inheritance', 'occult', 'sudden', 'accident', 'surgery', 'tax', 'insurance', 'alimony', 'mystery'],
-        9: ['university', 'college', 'visa', 'abroad', 'religion', 'father', 'guru', 'long trip', 'pilgrimage', 'luck', 'master'],
-        10: ['job', 'career', 'promotion', 'boss', 'government', 'profession', 'status', 'business', 'fame', 'company'],
-        11: ['friend', 'profit', 'gain', 'desire', 'wish', 'elder brother', 'elder sister', 'income', 'network'],
-        12: ['hospital', 'jail', 'prison', 'loss', 'foreign', 'hidden enemy', 'sleep', 'spiritual', 'ashram', 'expense']
+        1: ['myself', 'health', 'life', 'appearance', 'body', 'me', 'i ', 'my ', 'recover', 'safe', 'danger'],
+        2: ['money', 'wealth', 'salary', 'bank', 'finance', 'speech', 'family', 'saving', 'jewelry', 'gold', 'buying', 'selling'],
+        3: ['brother', 'sister', 'sibling', 'trip', 'travel', 'neighbor', 'email', 'message', 'courage', 'interview', 'document', 'contract', 'news'],
+        4: ['mother', 'house', 'home', 'real estate', 'property', 'car', 'vehicle', 'land', 'rain', 'weather', 'storm', 'climate', 'stolen', 'lost', 'found'],
+        5: ['child', 'baby', 'son', 'daughter', 'exam', 'lottery', 'romance', 'love', 'dating', 'stock', 'crypto', 'pregnancy', 'sports', 'entertainment'],
+        6: ['disease', 'sick', 'illness', 'pet', 'dog', 'cat', 'enemy', 'court', 'debt', 'loan', 'surgery', 'tenant', 'competition', 'lawsuit', 'dispute'],
+        7: ['marriage', 'husband', 'wife', 'partner', 'business partner', 'divorce', 'relationship', 'spouse', 'deal', 'agreement', 'thief', 'lawyer'],
+        8: ['death', 'inheritance', 'occult', 'sudden', 'accident', 'surgery', 'tax', 'insurance', 'alimony', 'mystery', 'secret', 'bankruptcy'],
+        9: ['university', 'college', 'visa', 'abroad', 'religion', 'father', 'guru', 'long trip', 'pilgrimage', 'luck', 'master', 'astrology', 'god'],
+        10: ['job', 'career', 'promotion', 'boss', 'government', 'profession', 'status', 'business', 'fame', 'company', 'judge', 'authority'],
+        11: ['friend', 'profit', 'gain', 'desire', 'wish', 'elder', 'income', 'network', 'award', 'bonus', 'success'],
+        12: ['hospital', 'jail', 'prison', 'loss', 'foreign', 'hidden enemy', 'sleep', 'spiritual', 'ashram', 'expense', 'charity', 'give up']
     }
     
     for house, keywords in house_keywords.items():
         for keyword in keywords:
-            # Using regex to find whole words to prevent partial matches
             if re.search(r'\b' + re.escape(keyword) + r'\b', query):
                 return house, keyword
                 
-    # Default to 1st house (general query) if no matches found
-    return 1, "general/self"
+    return 1, "general situation / self"
 
 # ==========================================
 # 3. CORE ASTRONOMICAL CALCULATIONS
@@ -95,7 +98,6 @@ def get_julian_day(dt, lat, lon):
     tz_str = tf.timezone_at(lng=lon, lat=lat) or "UTC"
     local_tz = pytz.timezone(tz_str)
     
-    # If the datetime is naive, localize it to the resolved timezone
     if dt.tzinfo is None:
         local_dt = local_tz.localize(dt)
     else:
@@ -123,97 +125,130 @@ def calculate_chart(jd, lat, lon):
         lat_deg = calc[1] 
         speed = calc[3]
         sign_idx = int(lon_deg // 30)
+        sign_name = ZODIAC_SIGNS[sign_idx]
         
         positions[p_name] = {
             'Longitude': lon_deg,
             'Latitude': lat_deg,
-            'Sign': ZODIAC_SIGNS[sign_idx],
-            'Sign_Idx': sign_idx,
+            'Sign': sign_name,
+            'Modality': MODALITIES[sign_name],
             'Degree': lon_deg % 30,
             'Speed': speed,
-            'Retrograde': 'Yes' if speed < 0 else 'No'
+            'Retrograde': speed < 0
         }
         
     cusps, ascmc = swe.houses_ex(jd, lat, lon, b'W', flag)
     asc_deg = ascmc[0]
     return positions, asc_deg
 
-def calculate_tithi(sun_lon, moon_lon):
-    diff = (moon_lon - sun_lon) % 360
-    tithi_num = math.floor(diff / 12) + 1
-    paksha = "Shukla" if tithi_num <= 15 else "Krishna"
-    display_num = tithi_num if tithi_num <= 15 else tithi_num - 15
-    return f"{paksha} Paksha, Tithi {display_num} ({'Auspicious' if tithi_num not in [4,9,14] else 'Rikta/Empty - Obstacles likely'})"
-
-# ==========================================
-# 4. ADVANCED PRASHNA RULES ENGINE
-# ==========================================
-def evaluate_tajika_yogas(positions, lagnesh, karyesh):
-    if lagnesh == karyesh:
-        return "You are in complete control of the situation. The outcome is highly favorable.", "Self-Signification"
-        
-    p1, p2 = positions[lagnesh], positions[karyesh]
-    orb1, orb2 = PLANET_ORBS[lagnesh], PLANET_ORBS[karyesh]
+def check_aspect(p1, p2, positions):
+    """Helper function to check exact aspects with orbs."""
+    orb1, orb2 = PLANET_ORBS[p1], PLANET_ORBS[p2]
     avg_orb = (orb1 + orb2) / 2.0
+    angle = abs(positions[p1]['Longitude'] - positions[p2]['Longitude'])
+    if angle > 180: angle = 360 - angle
     
-    angle = abs(p1['Longitude'] - p2['Longitude'])
-    if angle > 180:
-        angle = 360 - angle
-        
     aspects = {0: 'Conjunction', 60: 'Sextile', 90: 'Square', 120: 'Trine', 180: 'Opposition'}
-    
     for asp_deg, asp_name in aspects.items():
         if abs(angle - asp_deg) <= avg_orb:
-            fast_p, slow_p = (p1, p2) if abs(p1['Speed']) > abs(p2['Speed']) else (p2, p1)
-            if fast_p['Degree'] < slow_p['Degree']:
-                return f"Things are coming together. The necessary connection is being made for success.", f"Ithasala ({asp_name})"
-            else:
-                return f"The opportunity has recently passed, or there is an active separation/delay happening.", f"Easarpha ({asp_name})"
-                
-    return "There is no direct connection right now. Success is unlikely without a third party intervening.", "None"
+            return True, asp_name, avg_orb
+    return False, None, None
 
-def analyze_combustion_and_war(positions, lagnesh, karyesh):
-    issues = []
-    sun_lon = positions['Sun']['Longitude']
+# ==========================================
+# 4. EXHAUSTIVE PRASHNA RULES ENGINE
+# ==========================================
+def evaluate_horary_depth(positions, lagnesh, karyesh, target_house):
+    report = {}
     
-    for p in [lagnesh, karyesh]:
-        if p != 'Sun' and p not in ['Rahu', 'Ketu']:
-            dist = abs(positions[p]['Longitude'] - sun_lon)
-            if dist > 180: dist = 360 - dist
-            if dist <= 8.0:
-                issues.append(f"⚠️ {p} is 'Combust' (too close to the Sun). Meaning this matter is hidden, restricted, or someone feels burnt out.")
-                
-    if lagnesh not in ['Sun', 'Moon', 'Rahu', 'Ketu'] and karyesh not in ['Sun', 'Moon', 'Rahu', 'Ketu']:
-        dist = abs(positions[lagnesh]['Longitude'] - positions[karyesh]['Longitude'])
-        if dist <= 1.0:
-            winner = lagnesh if abs(positions[lagnesh]['Latitude']) > abs(positions[karyesh]['Latitude']) else karyesh
-            issues.append(f"⚔️ There is an active conflict (Planetary War). Ultimately, {winner} has the upper hand mathematically.")
+    # 1. Modality & Timing
+    karyesh_mod = positions[karyesh]['Modality']
+    if karyesh_mod == "Movable":
+        report['Timing'] = "Things will move quickly. Situations are subject to rapid change."
+    elif karyesh_mod == "Fixed":
+        report['Timing'] = "The situation is stuck or stable. Results will be slow, or current conditions will persist."
+    else:
+        report['Timing'] = "Mixed results. The situation is fluid and could go back and forth."
+
+    # 2. Retrograde Check (Delays/Returns)
+    if positions[karyesh]['Retrograde']:
+        report['Retrograde'] = f"The planet ruling this matter ({karyesh}) is Retrograde. This indicates delays, needing to re-do something, or the return of a past person/situation."
+    else:
+        report['Retrograde'] = "Forward momentum is present."
+
+    # 3. Tajika Yogas (Direct Connection)
+    if lagnesh == karyesh:
+        report['Verdict'] = "YES / FAVORABLE"
+        report['Reason'] = "The energies are perfectly aligned. The outcome is highly favorable and naturally manifesting (Self-Signification)."
+        report['Yoga'] = "Self-Signification"
+        return report
+        
+    has_aspect, asp_name, orb = check_aspect(lagnesh, karyesh, positions)
+    
+    if has_aspect:
+        p1, p2 = positions[lagnesh], positions[karyesh]
+        fast_p, slow_p = (p1, p2) if abs(p1['Speed']) > abs(p2['Speed']) else (p2, p1)
+        if fast_p['Degree'] < slow_p['Degree']:
+            report['Verdict'] = "YES / SUCCESS"
+            report['Reason'] = f"The necessary connection is being made. Success is indicated via a direct applying aspect."
+            report['Yoga'] = f"Ithasala ({asp_name})"
+        else:
+            report['Verdict'] = "NO / DELAYED"
+            report['Reason'] = "The opportunity has recently passed, or there is an active separation happening."
+            report['Yoga'] = f"Easarpha ({asp_name})"
+    else:
+        # 4. Nakta Yoga (Translation of Light via Moon)
+        # If no direct aspect, does the Moon aspect both?
+        if lagnesh != 'Moon' and karyesh != 'Moon':
+            moon_lag, _, _ = check_aspect('Moon', lagnesh, positions)
+            moon_kar, _, _ = check_aspect('Moon', karyesh, positions)
             
-    return issues
+            if moon_lag and moon_kar:
+                report['Verdict'] = "POSSIBLE WITH HELP"
+                report['Reason'] = "There is no direct connection, but the Moon acts as a bridge. Success can happen through a third party, middleman, or sudden change of mind."
+                report['Yoga'] = "Nakta Yoga (Translation of Light)"
+            else:
+                report['Verdict'] = "NO / UNLIKELY"
+                report['Reason'] = "There is no direct connection between you and the objective right now. Things remain isolated."
+                report['Yoga'] = "No Yoga (Void)"
+        else:
+            report['Verdict'] = "NO / UNLIKELY"
+            report['Reason'] = "There is no connection and no middleman to assist. The matter is currently out of reach."
+            report['Yoga'] = "No Yoga"
+
+    return report
+
+def get_moon_health(positions):
+    moon = positions['Moon']
+    sun_lon = positions['Sun']['Longitude']
+    dist = abs(moon['Longitude'] - sun_lon)
+    if dist > 180: dist = 360 - dist
+    
+    if dist < 12:
+        return "⚠️ The Moon (Mind/Situation) is Combust (Amavasya). The situation is highly stressful, hidden, or lacking energy."
+    elif moon['Sign'] in ['Scorpio']:
+        return "⚠️ The Moon is Debilitated. Emotional anxiety or a weak foundation is affecting the query."
+    return "The Moon (representing the mind and flow of events) is functioning normally."
 
 # ==========================================
 # 5. STREAMLIT USER INTERFACE
 # ==========================================
 def main():
-    st.title("🕉️ AI-Powered Horary (Prashna) Engine")
-    st.markdown("Simply ask your question naturally. The engine will detect the subject and calculate the exact astronomical outcome.")
+    st.title("🕉️ Ultimate Prashna Kundali Engine")
+    st.markdown("Advanced Horary Astrology featuring Tajika Yogas, Modality Timing, Retrograde analysis, and Translation of Light.")
     
     col1, col2 = st.columns([1, 2.5])
     
     with col1:
         st.header("1. Your Question")
-        
-        # SMART QUERY MODULE
         user_query = st.text_area(
             "What is your question?", 
-            placeholder="E.g., Will I get the new job? Will my dog recover? Should I buy this house?",
-            help="You can type or click the microphone icon on your mobile/desktop keyboard to dictate your question naturally."
+            placeholder="E.g., Will I get the new job? Will it rain today? Will my ex return? Is the lost item safe?",
+            help="Type naturally. The NLP engine maps your intent to the correct astronomical house."
         )
         
         st.markdown("---")
         
-        # LOCATION MODULE
-        st.subheader("2. Where are you?")
+        st.subheader("2. Location")
         loc_choice = st.selectbox("Select City", list(CITY_DB.keys()))
         
         lat, lon = CITY_DB["Jaipur, Rajasthan (Default)"]["lat"], CITY_DB["Jaipur, Rajasthan (Default)"]["lon"]
@@ -224,30 +259,24 @@ def main():
                 clat, clon = geocode_location(custom_city)
                 if clat and clon:
                     lat, lon = clat, clon
-                    st.success(f"Located: {lat:.4f}, {lon:.4f}")
                 else:
-                    st.error("Location not found. Please try again.")
+                    st.error("Location not found.")
         elif loc_choice != "Jaipur, Rajasthan (Default)":
             lat, lon = CITY_DB[loc_choice]["lat"], CITY_DB[loc_choice]["lon"]
             
-        # TIME MODULE (Fixed for local time)
         st.subheader("3. Time of Query")
         ist_now = datetime.now(pytz.timezone('Asia/Kolkata'))
-        
         q_date = st.date_input("Date", ist_now.date())
         q_time = st.time_input("Time", ist_now.time())
         
         generate = st.button("🔮 Ask the Cosmos", type="primary", use_container_width=True)
 
     if generate and user_query:
-        with st.spinner("Analyzing your question and calculating planetary positions..."):
+        with st.spinner("Analyzing astrological modalities, yogas, and planetary speeds..."):
             
-            # NLP Step: Find out what they are asking about
             target_house, detected_word = extract_target_house(user_query)
             
-            # Time & Astro Step
             dt_combined = datetime.combine(q_date, q_time)
-            # Make the combined datetime aware of the IST timezone for the calculation
             ist_tz = pytz.timezone('Asia/Kolkata')
             dt_aware = ist_tz.localize(dt_combined)
             
@@ -259,52 +288,44 @@ def main():
             karyesha_sign_idx = (asc_sign_idx + target_house - 1) % 12
             karyesh = RASHI_LORDS[karyesha_sign_idx]
             
-            tithi_str = calculate_tithi(positions['Sun']['Longitude'], positions['Moon']['Longitude'])
-            verdict, yoga_name = evaluate_tajika_yogas(positions, lagnesh, karyesh)
-            dignity_issues = analyze_combustion_and_war(positions, lagnesh, karyesh)
+            # Run the deep rules engine
+            report = evaluate_horary_depth(positions, lagnesh, karyesh, target_house)
+            moon_status = get_moon_health(positions)
             
-            # --- DISPLAY DASHBOARD ---
             with col2:
                 st.header("The Answer")
+                st.info(f"🧠 **Engine detected:** You are asking about **'{detected_word}'**, mapping to **House {target_house}**.")
                 
-                # Show what the AI understood
-                st.info(f"🧠 **Engine detected:** You are asking about **'{detected_word}'**, which is ruled by Astrological House **{target_house}**.")
-                
-                # Simplified User Verdict
-                if "Success" in verdict or "control" in verdict:
-                    st.success("✅ **YES / HIGHLY FAVORABLE**")
-                    st.write(f"**The Astrological Reason:** {verdict}")
-                elif "Passed" in verdict or "unlikely" in verdict:
-                    st.error("❌ **NO / UNFAVORABLE / DELAYED**")
-                    st.write(f"**The Astrological Reason:** {verdict}")
+                # Dynamic Styling based on Verdict
+                if "YES" in report['Verdict']:
+                    st.success(f"### Outcome: {report['Verdict']}")
+                elif "NO" in report['Verdict']:
+                    st.error(f"### Outcome: {report['Verdict']}")
                 else:
-                    st.warning("⏳ **NEUTRAL / NEEDS INTERVENTION**")
-                    st.write(f"**The Astrological Reason:** {verdict}")
+                    st.warning(f"### Outcome: {report['Verdict']}")
                     
-                if dignity_issues:
-                    st.write("---")
-                    st.write("### ⚠️ Potential Obstacles Identified:")
-                    for issue in dignity_issues:
-                        st.error(issue)
-                        
-                # Keep the deep math hidden in an expander for advanced users
-                with st.expander("Show Advanced Astrological Calculations"):
-                    st.write(f"**Panchang Matrix:** {tithi_str}")
-                    st.write(f"**Ascendant (Lagna):** {ZODIAC_SIGNS[asc_sign_idx]} ({asc_deg%30:.2f}°)")
+                st.write(f"**Astrological Reasoning:** {report['Reason']}")
+                
+                st.markdown("---")
+                st.subheader("Deeper Insights (Timing & Context)")
+                st.write(f"⏱️ **Pace of Outcome:** {report['Timing']}")
+                st.write(f"🔄 **Retrograde Factor:** {report['Retrograde']}")
+                st.write(f"🌘 **The Mind/Environment (Moon):** {moon_status}")
+                
+                with st.expander("Show Raw Astrological Data"):
                     st.write(f"**Asker's Planet (Lagnesh):** {lagnesh}")
                     st.write(f"**Objective's Planet (Karyesh):** {karyesh}")
-                    st.write(f"**Yoga Formed:** {yoga_name}")
+                    st.write(f"**Primary Yoga Formed:** {report['Yoga']}")
                     
-                    st.write("**Planetary Positions:**")
                     df = pd.DataFrame.from_dict(positions, orient='index')
-                    df['Longitude'] = df['Longitude'].apply(lambda x: f"{x:.4f}°")
-                    df['Latitude'] = df['Latitude'].apply(lambda x: f"{x:.4f}°")
-                    df['Degree'] = df['Degree'].apply(lambda x: f"{x:.2f}°")
-                    df['Speed'] = df['Speed'].apply(lambda x: f"{x:.4f}")
-                    st.dataframe(df, use_container_width=True)
+                    df['Longitude'] = df['Longitude'].apply(lambda x: f"{x:.2f}°")
+                    df['Speed'] = df['Speed'].apply(lambda x: f"{x:.3f}")
+                    df['Retrograde'] = df['Retrograde'].apply(lambda x: "Yes" if x else "No")
+                    # Displaying relevant columns for a cleaner look
+                    st.dataframe(df[['Sign', 'Modality', 'Degree', 'Retrograde', 'Speed']], use_container_width=True)
 
     elif generate and not user_query:
-        st.error("Please type or speak your question first!")
+        st.error("Please type your question first!")
 
 if __name__ == "__main__":
     main()

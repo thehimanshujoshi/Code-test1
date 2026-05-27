@@ -1,7 +1,6 @@
 """
 Financial Astrology ML Predictor – Streamlit Web App
-Robust, backtest‑ready version. Uses geocentric planetary positions and
-supports historical prediction (backtesting) via the date picker.
+Fully working version with backtesting, geocentric calculations, and proper one‑hot encoding.
 """
 
 import streamlit as st
@@ -40,10 +39,8 @@ RULING = {
 
 # ============== EPHEMERIS UTILITIES (GEOCENTRIC) ==============
 def geocentric_lon(planet_name, date_ephem):
-    """Return geocentric ecliptic longitude (degrees) for a planet at given ephem.Date."""
     body = getattr(ephem, planet_name)()
-    body.compute(date_ephem)                         # geocentric by default
-    # Convert equatorial RA/Dec to ecliptic longitude
+    body.compute(date_ephem)
     eq = ephem.Equatorial(body.a_ra, body.a_dec, epoch=ephem.J2000)
     ecl = ephem.Ecliptic(eq)
     return np.degrees(ecl.lon)
@@ -62,15 +59,13 @@ def moon_phase(date_ephem):
     return moon.moon_phase
 
 def is_retrograde(planet_name, date_ephem, delta_hours=1):
-    """Check if planet is retrograde by comparing longitudes over a small interval."""
     if planet_name in ["Sun", "Moon"]:
         return False
     lon1 = geocentric_lon(planet_name, date_ephem)
     lon2 = geocentric_lon(planet_name, ephem.Date(date_ephem + delta_hours/24))
-    return lon2 < lon1  # true if longitude decreased
+    return lon2 < lon1
 
 def aspect_angle(lon1, lon2):
-    """Return angular separation in degrees (0–180)."""
     angle = abs(lon1 - lon2) % 360
     if angle > 180:
         angle = 360 - angle
@@ -87,30 +82,25 @@ def major_aspect(angle, orb=4):
     return None
 
 def is_voc_moon(date_ephem, max_search_hours=48):
-    """True if Moon is Void‑of‑Course at given time.
-       VOC: Moon makes no major aspect before it changes sign."""
     moon = ephem.Moon()
     moon.compute(date_ephem)
-    start_lon = np.degrees(ephem.Ecliptic(ephem.Equatorial(moon.a_ra, moon.a_dec, epoch=ephem.J2000)).lon)
+    start_ecl = ephem.Ecliptic(ephem.Equatorial(moon.a_ra, moon.a_dec, epoch=ephem.J2000))
+    start_lon = np.degrees(start_ecl.lon)
     start_sign = zodiac_sign(start_lon)
 
-    # Find the time of the next sign change (search up to max_search_hours)
     end_time = ephem.Date(date_ephem + max_search_hours / 24)
     t = date_ephem
     next_sign_time = None
     while t < end_time:
         moon.compute(t)
         ecl = ephem.Ecliptic(ephem.Equatorial(moon.a_ra, moon.a_dec, epoch=ephem.J2000))
-        lon = np.degrees(ecl.lon)
-        if zodiac_sign(lon) != start_sign:
+        if zodiac_sign(np.degrees(ecl.lon)) != start_sign:
             next_sign_time = t
             break
-        t = ephem.Date(t + 10/1440)  # step 10 minutes
-
+        t = ephem.Date(t + 10/1440)
     if not next_sign_time:
         return False
 
-    # Check if any major aspect (1° orb) occurs between date_ephem and next_sign_time
     t = date_ephem
     while t <= next_sign_time:
         moon.compute(t)
@@ -123,16 +113,14 @@ def is_voc_moon(date_ephem, max_search_hours=48):
             body.compute(t)
             p_ecl = ephem.Ecliptic(ephem.Equatorial(body.a_ra, body.a_dec, epoch=ephem.J2000))
             p_lon = np.degrees(p_ecl.lon)
-            angle = aspect_angle(moon_lon, p_lon)
-            if major_aspect(angle, orb=1):
+            if major_aspect(aspect_angle(moon_lon, p_lon), orb=1):
                 return False
-        t = ephem.Date(t + 5/1440)  # step 5 minutes
+        t = ephem.Date(t + 5/1440)
     return True
 
 # ================== FEATURE COMPUTATION (CACHED) ==================
 @st.cache_data(ttl=3600)
 def compute_astro_features(dates):
-    """Build astrological feature DataFrame for a list of dates."""
     rows = []
     for d in dates:
         dt = ephem.Date(d)
@@ -147,7 +135,6 @@ def compute_astro_features(dates):
             row[f"{p}_retro"] = is_retrograde(p, dt)
         row["moon_phase"] = moon_phase(dt)
         row["moon_voc"] = is_voc_moon(dt)
-        # Aspects
         aspects = []
         for i_p1, p1 in enumerate(PLANETS):
             for p2 in PLANETS[i_p1+1:]:
@@ -206,9 +193,11 @@ def define_target(df, threshold=0.005):
     df.loc[df['reversal_down'], 'label'] = 'Reversal Down'
     return df.dropna()
 
-# ================== ML TRAINING ==================
+# ================== ML TRAINING (FIXED ENCODING) ==================
 def train_model(feature_df, target_series):
-    X = pd.get_dummies(feature_df.drop(columns=['date', 'aspects']), columns=['aspects'])
+    # Keep 'aspects' column for one‑hot encoding
+    X = feature_df.drop(columns=['date'])               # drops only date
+    X = pd.get_dummies(X, columns=['aspects'])          # now 'aspects' exists → one‑hot
     le = LabelEncoder()
     y = le.fit_transform(target_series)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -218,7 +207,9 @@ def train_model(feature_df, target_series):
     return model, le, X.columns, acc
 
 def predict_next(model, le, feature_df_latest, feature_columns):
-    X_latest = pd.get_dummies(feature_df_latest.drop(columns=['date', 'aspects']), columns=['aspects'])
+    # Same logic: drop only 'date', then one‑hot encode 'aspects'
+    X_latest = feature_df_latest.drop(columns=['date'])
+    X_latest = pd.get_dummies(X_latest, columns=['aspects'])
     X_latest = X_latest.reindex(columns=feature_columns, fill_value=0)
     probs = model.predict_proba(X_latest)[0]
     pred_idx = np.argmax(probs)
@@ -262,10 +253,9 @@ st.title("🔮 Financial Astrology & ML Market Predictor")
 st.markdown("""
 Predict next‑day market moves using a Random Forest trained on **geocentric** planetary positions,
 Nakshatras, retrogrades, and aspects.  
-**Backtesting:** Simply choose a past date in the *Prediction Date* field to see what the model would have predicted.
+**Backtesting:** Choose a past date in the *Prediction Date* field to see what the model would have predicted.
 """)
 
-# Sidebar
 ticker = st.sidebar.text_input("Ticker Symbol", value="NIFTY").upper()
 start_date = st.sidebar.date_input("Start Date", datetime(2020, 1, 1))
 end_date = st.sidebar.date_input("End Date", datetime.today())
@@ -277,7 +267,7 @@ if st.sidebar.button("Train Model & Analyse"):
         with st.spinner("Fetching price data..."):
             price_df = fetch_price_data(ticker, start_date, end_date)
             if price_df.empty:
-                st.error("No price data available for the selected range.")
+                st.error("No price data available.")
                 st.stop()
             dates = price_df.index.tolist()
             last_close = price_df['Close'].iloc[-1]
@@ -294,7 +284,6 @@ if st.sidebar.button("Train Model & Analyse"):
 
         st.success(f"Model trained. Test accuracy: {acc:.2%}")
 
-        # Save to session state
         st.session_state.model = model
         st.session_state.le = le
         st.session_state.feature_cols = feature_cols
@@ -303,7 +292,6 @@ if st.sidebar.button("Train Model & Analyse"):
         st.session_state.last_close = last_close
         st.session_state.trained = True
 
-        # Prediction for the requested date
         with st.spinner("Generating prediction..."):
             pred_feat = compute_astro_features([predict_date])
             pred_label, probs, classes = predict_next(model, le, pred_feat, feature_cols)
@@ -317,7 +305,6 @@ if st.sidebar.button("Train Model & Analyse"):
         st.code(traceback.format_exc())
         st.stop()
 
-# Display results if trained
 if st.session_state.get('trained', False):
     model = st.session_state.model
     le = st.session_state.le
